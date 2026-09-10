@@ -103,5 +103,12 @@ CROSS_ENCODER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 RERANK_CANDIDATE_TOP_N = 30  # candidates fed INTO the cross-encoder (never the full 150-vehicle set)
 RERANK_TOP_K = 5  # final results shown to the user, after reranking
 
+# ---- Constraint relaxation & fallback (Phase 10) ----
+# Price is widened in steps sized from the ACTUAL dataset's price quantiles
+# (not an arbitrary percentage bump) -- e.g. a price ceiling relaxes up to
+# the next decile boundary of real Price_Lakhs values, one step at a time.
+PRICE_RELAXATION_QUANTILE_STEP = 0.1  # decile-sized steps through the real price distribution
+PRICE_RELAXATION_MAX_STEPS = 5  # give up widening price after this many decile steps and drop it outright
+
 # ---- Future phases (placeholders — not read by earlier-phase code) ----
 # RERANK_TOP_K = ...               # Phase 9
