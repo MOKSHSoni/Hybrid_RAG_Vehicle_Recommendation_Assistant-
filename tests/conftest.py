@@ -9,6 +9,22 @@ import config
 from src.enrichment.vehicle import VehicleEnrichment
 from src.ingestion.csv_loader import load_documents
 from src.pipeline import build_knowledge_base
+from src.query.ollama_client import OllamaError, chat_text
+
+
+def _ollama_available() -> bool:
+    try:
+        # Routed through chat_text (schema-wrapped), not raw chat() --
+        # an unconstrained chat() call is subject to Qwen3's ~15s
+        # thinking-mode latency (see ollama_client.py) and would make
+        # this probe itself flaky/slow. chat_text is reliably fast.
+        chat_text(messages=[{"role": "user", "content": "reply with the single word: ok"}], timeout=10)
+        return True
+    except OllamaError:
+        return False
+
+
+requires_ollama = pytest.mark.skipif(not _ollama_available(), reason="Ollama server/model not available")
 
 
 @pytest.fixture(scope="session")
