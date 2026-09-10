@@ -53,7 +53,35 @@ DEFAULT_TOP_K = 5
 # ---- Reproducibility ----
 RANDOM_SEED = 42
 
-# ---- Future phases (placeholders — not read by any Phase 1 code) ----
-# HYBRID_FUSION_ALPHA = ...        # Phase 4/7
+# ---- Domain vocabularies (shared by enrichment, extraction, evaluation) ----
+VALID_BODY_TYPES = ["SUV", "Sedan", "Hatchback", "MPV", "Coupe", "Convertible"]
+VALID_FUEL_TYPES = ["Petrol", "Diesel", "Electric", "Hybrid", "CNG"]
+VALID_TRANSMISSIONS = ["Automatic", "Manual"]
+
+# ---- Ollama / Qwen3 (Phase 3+) ----
+OLLAMA_HOST = "http://127.0.0.1:11434"
+OLLAMA_MODEL = "qwen3:4b"  # Q4_K_M quantization (Ollama's default tag for this size)
+OLLAMA_TIMEOUT_SECONDS = 60
+OLLAMA_TEMPERATURE = 0.0  # deterministic extraction/rewriting
+
+# ---- Query understanding (Phase 3) ----
+EXTRACTION_RETRY_COUNT = 1  # retry the LLM extraction once on invalid JSON, then fall back to regex-only
+CONVERSATION_HISTORY_TURNS = 6  # how many recent turns feed context resolution
+
+# Fields treated as "hard" (functional necessities, relaxed last in Phase 10).
+# Everything else extracted is "soft" by default (relaxed first). This list
+# doubles as Phase 10's relaxation order, earliest-relaxed first.
+HARD_CONSTRAINT_FIELDS = {"seating_capacity"}
+CONSTRAINT_RELAXATION_ORDER = [
+    "price_max_lakhs",
+    "price_min_lakhs",
+    "body_type",
+    "transmission",
+    "brand",
+    "fuel_types",
+    "seating_capacity",
+]
+
+# ---- Future phases (placeholders — not read by earlier-phase code) ----
+# HYBRID_FUSION_ALPHA = ...        # Phase 7
 # RERANK_TOP_K = ...               # Phase 9
-# QUERY_UNDERSTANDING_MODEL = ...  # Phase 3/5 (Ollama model name)
