@@ -8,7 +8,7 @@ embeddings, FAISS index, and BM25 index are correct and retrievable.
 from collections import Counter
 
 import config
-from src.embeddings.embedder import Embedder, normalize_embeddings
+from src.embeddings.embedder import normalize_embeddings
 from src.pipeline import build_knowledge_base
 from src.retrieval.dense.faiss_index import search as faiss_search
 
@@ -61,7 +61,7 @@ def main() -> None:
 
     # --- Step 8: sample queries against both backends ---
     banner("Sample queries: Dense (FAISS) vs Sparse (BM25)")
-    embedder = Embedder()
+    embedder = kb.embedder
     queries = [
         "affordable 7 seater SUV with good mileage",
         "Porsche Cayenne price and top speed",
