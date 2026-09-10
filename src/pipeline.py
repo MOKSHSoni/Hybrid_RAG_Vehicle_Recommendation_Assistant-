@@ -29,6 +29,7 @@ class KnowledgeBase:
     chunk_store: ChunkStore
     faiss_index: faiss.Index
     bm25_index: BM25Index
+    embedder: Embedder
 
 
 def build_knowledge_base(csv_path: Optional[Path] = None, save: bool = True) -> KnowledgeBase:
@@ -62,6 +63,7 @@ def build_knowledge_base(csv_path: Optional[Path] = None, save: bool = True) -> 
         chunk_store=chunk_store,
         faiss_index=faiss_idx,
         bm25_index=bm25_idx,
+        embedder=embedder,
     )
 
 
@@ -75,6 +77,7 @@ def load_knowledge_base() -> KnowledgeBase:
         chunk_store=chunk_store,
         faiss_index=faiss_idx,
         bm25_index=bm25_idx,
+        embedder=Embedder(),
     )
 
 
