@@ -82,6 +82,12 @@ CONSTRAINT_RELAXATION_ORDER = [
     "seating_capacity",
 ]
 
+# ---- Hybrid retrieval (Phase 7) ----
+# Fraction of the fused score from BM25 (dense gets 1 - alpha). NOT assumed
+# optimal -- Phase 12 sweeps HYBRID_FUSION_SWEEP_ALPHAS against the eval set
+# and picks the winner; this default is just a commonly-cited starting point.
+HYBRID_FUSION_ALPHA = 0.3
+HYBRID_FUSION_SWEEP_ALPHAS = [0.1, 0.2, 0.3, 0.4, 0.5]
+
 # ---- Future phases (placeholders — not read by earlier-phase code) ----
-# HYBRID_FUSION_ALPHA = ...        # Phase 7
 # RERANK_TOP_K = ...               # Phase 9
