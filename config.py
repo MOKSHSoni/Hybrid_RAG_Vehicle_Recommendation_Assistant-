@@ -95,5 +95,13 @@ HYBRID_FUSION_SWEEP_ALPHAS = [0.1, 0.2, 0.3, 0.4, 0.5]
 # flood of weak matches outrank one genuinely strong unique match.
 DEDUP_EVIDENCE_BOOST = 0.05
 
+# ---- Cross-encoder reranking (Phase 9) ----
+# Starting checkpoint per the project's locked decision -- kept configurable
+# rather than hard-coded; only change if Phase 12 evaluation shows a
+# meaningfully better checkpoint for this retrieval task.
+CROSS_ENCODER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+RERANK_CANDIDATE_TOP_N = 30  # candidates fed INTO the cross-encoder (never the full 150-vehicle set)
+RERANK_TOP_K = 5  # final results shown to the user, after reranking
+
 # ---- Future phases (placeholders — not read by earlier-phase code) ----
 # RERANK_TOP_K = ...               # Phase 9

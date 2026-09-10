@@ -14,6 +14,7 @@ thousands.
 """
 
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import List
 
@@ -25,6 +26,9 @@ class ChunkStore:
         self._chunks = chunks
         self._by_chunk_id = {c.chunk_id: c for c in chunks}
         self._by_vector_index = {c.vector_index: c for c in chunks if c.vector_index is not None}
+        self._by_doc_id = defaultdict(list)
+        for c in chunks:
+            self._by_doc_id[c.doc_id].append(c)
 
     def __len__(self) -> int:
         return len(self._chunks)
@@ -43,6 +47,12 @@ class ChunkStore:
 
     def get_by_vector_index(self, index: int) -> Chunk:
         return self._by_vector_index[index]
+
+    def get_by_doc_id(self, doc_id: str) -> List[Chunk]:
+        """All chunks belonging to one vehicle (e.g. both product_overview
+        and features), regardless of which of them a given retrieval pass
+        happened to surface."""
+        return list(self._by_doc_id[doc_id])
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
