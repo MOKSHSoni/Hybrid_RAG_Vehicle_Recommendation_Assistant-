@@ -89,5 +89,11 @@ CONSTRAINT_RELAXATION_ORDER = [
 HYBRID_FUSION_ALPHA = 0.3
 HYBRID_FUSION_SWEEP_ALPHAS = [0.1, 0.2, 0.3, 0.4, 0.5]
 
+# ---- Multi-query merge & dedup (Phase 8) ----
+# Per-extra-match score boost when a vehicle is confirmed by more than one
+# (query, chunk) hit -- gentle tie-breaking signal, not enough to let a
+# flood of weak matches outrank one genuinely strong unique match.
+DEDUP_EVIDENCE_BOOST = 0.05
+
 # ---- Future phases (placeholders — not read by earlier-phase code) ----
 # RERANK_TOP_K = ...               # Phase 9
