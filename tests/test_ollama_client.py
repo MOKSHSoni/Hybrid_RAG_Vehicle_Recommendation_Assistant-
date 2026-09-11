@@ -1,7 +1,29 @@
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from src.query.ollama_client import OllamaError, chat_long_form, chat_text, looks_like_rambling
+from src.query.ollama_client import OllamaError, chat_long_form, chat_text, is_reachable, looks_like_rambling
+
+
+def test_is_reachable_true_when_list_succeeds():
+    with patch("src.query.ollama_client.ollama.Client") as mock_client_cls:
+        mock_client_cls.return_value.list.return_value = {"models": []}
+        assert is_reachable() is True
+
+
+def test_is_reachable_false_on_any_exception():
+    with patch("src.query.ollama_client.ollama.Client") as mock_client_cls:
+        mock_client_cls.return_value.list.side_effect = ConnectionError("refused")
+        assert is_reachable() is False
+
+
+def test_is_reachable_does_not_invoke_chat(monkeypatch):
+    # A reachability check should never trigger real generation -- confirm
+    # it only ever calls .list(), never .chat().
+    mock_client = MagicMock()
+    with patch("src.query.ollama_client.ollama.Client", return_value=mock_client):
+        is_reachable()
+    mock_client.chat.assert_not_called()
+    mock_client.list.assert_called_once()
 
 
 def test_looks_like_rambling_detects_marker_phrases():
