@@ -119,7 +119,8 @@ data/
   processed/             # generated, human-inspectable enriched vehicle data (gitignored)
   index/                 # generated FAISS/BM25 indices + chunk store (gitignored)
 evaluation/
-  queries_v1.json        # DRAFT eval query set (27 queries, 13 categories) -- needs human review
+  queries_v1.json        # superseded draft, kept for history -- see queries_v2.json's changelog
+  queries_v2.json        # active DRAFT eval query set (27 queries, 13 categories) -- needs human review
 src/
   ingestion/             # GENERIC CSV -> NormalizedDocument loader (no domain knowledge)
   enrichment/            # domain-specific: BaseEnrichment interface + VehicleEnrichment (body-type heuristic, etc.)
@@ -162,21 +163,26 @@ the generation prompt can never claim an unverified constraint was met.
 
 ## Known limitations (stated explicitly, not hidden)
 
-- **`evaluation/queries_v1.json` is a draft.** Per the project's locked
+- **`evaluation/queries_v2.json` is a draft.** Per the project's locked
   decisions, the agent wrote the first version from direct inspection of
   the real dataset; several entries are flagged `needs_verification` and
   are transparently excluded from retrieval metrics rather than skewing
   results. It should be reviewed/refined by a human before being treated
-  as ground truth, and revisions should go in `queries_v2.json` etc.
+  as ground truth, and revisions should go in `queries_v3.json` etc.
   rather than editing this file in place.
 - **The Body_Type heuristic is approximate.** `src/enrichment/body_type.py`
   documents its keyword rules and one known misclassification (BMW 8
   Series, a real-world coupe, falls back to Sedan) as an accepted
   limitation of deriving a field the source data doesn't provide.
-- **No true "sort by field" capability.** Superlative queries ("which car
-  has the highest top speed") are answered via retrieval relevance, not
-  an explicit numeric sort — flagged in the eval set (q23/q24) as a
-  known architectural gap, not silently glossed over.
+- **"Sort by field" is now solved for named superlative fields, not
+  arbitrary ones.** Requests naming one of the fields wired up in
+  `regex_extraction.py`'s `_SUPERLATIVE_PATTERNS` ("cheapest," "fastest,"
+  "biggest boot space," "highest ground clearance," "most powerful,"
+  "best mileage") get an exact metadata sort (`MODE_SUPERLATIVE` in
+  `src/retrieval/modes.py`), verified against real data (q23/q24 in the
+  eval set). A genuinely novel superlative phrasing outside that table,
+  or over a field with no `numeric_ranges`/`superlative` support at all,
+  still falls back to relevance-based retrieval rather than a true sort.
 - **LLM output has real run-to-run variance** on this CPU-only setup even
   at temperature 0 (documented in `ollama_client.py` and `generation.py`)
   — the system is built to degrade gracefully around this, not to assume

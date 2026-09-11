@@ -1,7 +1,7 @@
 """Phase 12 deliverable: evaluation.
 
-Runs the real pipeline against evaluation/queries_v1.json (a DRAFT eval
-set -- see its _meta.description) and reports:
+Runs the real pipeline against evaluation/queries_v2.json (config.EVAL_QUERIES_PATH
+-- a DRAFT eval set, see its _meta.description) and reports:
   1. Query understanding accuracy (extracted vs expected constraints, per field).
   2. Retrieval quality across configurations: BM25 / Dense / Hybrid /
      Hybrid+Expansion / Hybrid+Transformation / Hybrid+HyDE / Hybrid+Cross-Encoder.
