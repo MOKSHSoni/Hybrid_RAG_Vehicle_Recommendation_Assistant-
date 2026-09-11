@@ -17,7 +17,16 @@ _EXTENDED_COLUMNS = ["top_speed_kmph", "boot_space_l", "ground_clearance_mm", "m
 def build_comparison_rows(outcome: RetrievalOutcome, chunk_store=None) -> List[Dict[str, Any]]:
     """One row per result. Base columns (name/price/seats/body/fuel)
     always included; extended numeric columns included only if at least
-    one result has a non-None value for them, to avoid an all-N/A column.
+    one result has a non-None value for them, to avoid an all-empty column.
+
+    Missing values stay None rather than becoming the string "N/A": these
+    rows feed st.dataframe(), and a numeric column holding a mix of floats
+    and "N/A" strings makes PyArrow (Streamlit's serializer) raise
+    ArrowInvalid. Keeping them None also preserves the column's numeric
+    dtype, so the UI table stays sortable by price/boot space. Rendering
+    missing values is each display layer's job -- see context_builder's
+    _format_table() for the text version.
+
     `chunk_store` is unused (metadata already lives on each result's
     best_chunk) -- kept as a parameter for a uniform call signature
     alongside context_builder's other helpers.
@@ -33,8 +42,8 @@ def build_comparison_rows(outcome: RetrievalOutcome, chunk_store=None) -> List[D
         for col in columns:
             value = metadata.get(col)
             if col == "fuel_types":
-                row[col] = ", ".join(value) if value else "N/A"
+                row[col] = ", ".join(value) if value else None
             else:
-                row[col] = value if value is not None else "N/A"
+                row[col] = value
         rows.append(row)
     return rows

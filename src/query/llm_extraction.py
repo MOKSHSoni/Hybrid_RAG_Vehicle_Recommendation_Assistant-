@@ -105,7 +105,11 @@ _EXTENDED_TRIGGER_RE = re.compile(
     r"|clearance"
     r"|mileage|millage|economy|economical|efficien\w*|kmpl"
     r"|engine|cc|litre|liter|displacement|power|powerful"
-    r"|\w+est|most|least|best|worst"
+    # Explicit superlatives only: a "\w+est" catch-all matched ordinary
+    # words like "suggest"/"request"/"latest" and escalated needlessly.
+    r"|cheapest|fastest|quickest|biggest|largest|smallest|highest|lowest"
+    r"|roomiest|priciest|costliest|longest|shortest|widest|tallest"
+    r"|most|least|best|worst"
     r")\b",
     re.IGNORECASE,
 )
@@ -145,7 +149,15 @@ superlative ("cheapest", "the most affordable") describe a price RANGE, not a re
 cheapest option: set price_max_lakhs instead (if a number is given or implied) and leave
 superlative_field null. Example: "affordable SUV under 15 lakh" -> price_max_lakhs=15,
 superlative_field=null (NOT price_lakhs/asc) -- the user wants options within budget, not just the
-one cheapest vehicle."""
+one cheapest vehicle.
+
+CRITICAL -- NEVER FILL IN A FIELD THE QUERY DID NOT MENTION.
+Most queries mention only one or two things. Emitting a value for anything else is an ERROR, even
+if the value looks harmless or like a sensible default. A full range (0 to some maximum) is NOT a
+default -- it is wrong. Use null.
+Example: "suggest cars of bmw" -> "brand": "BMW", "fuel_types": [], EVERY other field null. Filling
+in seating_capacity, body_type, price or any spec range there would be wrong: the query said
+nothing about them."""
 
 
 _CORE_SYSTEM_PROMPT = f"""You extract structured vehicle search constraints from a user's query.
@@ -165,7 +177,15 @@ Valid fuel_types values: {", ".join(config.VALID_FUEL_TYPES)}
 Valid transmission values: {", ".join(config.VALID_TRANSMISSIONS)}
 price_max_lakhs / price_min_lakhs are in Lakhs INR (1 Crore = 100 Lakhs).
 Note: "affordable"/"budget-friendly"/"cheap" describe a price RANGE -- set price_max_lakhs if a
-number is given or implied, and do not treat them as a request for the single cheapest vehicle."""
+number is given or implied, and do not treat them as a request for the single cheapest vehicle.
+
+CRITICAL -- NEVER FILL IN A FIELD THE QUERY DID NOT MENTION.
+Most queries mention only one or two things. Emitting a value for anything else is an ERROR, even
+if the value looks harmless or like a sensible default. A full range (0 to some maximum) is NOT a
+default -- it is wrong. Use null.
+Example: "suggest cars of bmw" -> "brand": "BMW", "fuel_types": [], EVERY other field null. Filling
+in seating_capacity, body_type, price or any spec range there would be wrong: the query said
+nothing about them."""
 
 def needs_extended_extraction(query: str) -> bool:
     """Whether a query is worth paying the full 19-field schema for.
@@ -258,9 +278,24 @@ def _to_constraints(data: Dict[str, Any]) -> Constraints:
 
     fuel_types = [f for f in (data.get("fuel_types") or []) if f in config.VALID_FUEL_TYPES]
 
+    # A model asked to emit every field tends to fill it with "sensible
+    # defaults" -- a 0 floor, every fuel type, a range spanning the whole
+    # domain. Those constrain nothing, but they DO push the pipeline into
+    # needless relaxation, so they're stripped here rather than trusted.
+    # (The prompt discourages this too; this is the deterministic backstop,
+    # per the project rule that the LLM never directly controls filtering.)
+    if set(fuel_types) >= set(config.VALID_FUEL_TYPES):
+        fuel_types = []  # "every fuel type" is the absence of a fuel preference
+
+    price_min = data.get("price_min_lakhs")
+    if price_min == 0:
+        price_min = None  # a zero floor excludes nothing
+
     numeric_ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
     for canonical_field, schema_prefix in _NUMERIC_RANGE_FIELDS.items():
         min_v, max_v = data.get(f"{schema_prefix}_min"), data.get(f"{schema_prefix}_max")
+        if min_v == 0:
+            min_v = None  # these metrics are all non-negative, so a 0 floor is a no-op
         if min_v is not None or max_v is not None:
             numeric_ranges[canonical_field] = (min_v, max_v)
 
@@ -276,7 +311,7 @@ def _to_constraints(data: Dict[str, Any]) -> Constraints:
         seating_capacity=data.get("seating_capacity"),
         body_type=body_type,
         price_max_lakhs=data.get("price_max_lakhs"),
-        price_min_lakhs=data.get("price_min_lakhs"),
+        price_min_lakhs=price_min,
         numeric_ranges=numeric_ranges,
         superlative_field=superlative_field,
         superlative_direction=superlative_direction,

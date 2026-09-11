@@ -65,8 +65,14 @@ def build_context_block(outcome: RetrievalOutcome, chunk_store: ChunkStore) -> s
 
 
 def _format_table(rows) -> str:
+    # build_comparison_rows() leaves missing values as None (so the UI's
+    # dataframe keeps numeric dtypes); rendering them as "N/A" is this
+    # text layer's job.
     columns = list(rows[0].keys())
     header = "| " + " | ".join(columns) + " |"
     separator = "| " + " | ".join("---" for _ in columns) + " |"
-    body = ["| " + " | ".join(str(row.get(c, "N/A")) for c in columns) + " |" for row in rows]
+    body = [
+        "| " + " | ".join("N/A" if row.get(c) is None else str(row.get(c)) for c in columns) + " |"
+        for row in rows
+    ]
     return "\n".join([header, separator, *body])

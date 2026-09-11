@@ -26,7 +26,42 @@ def test_build_comparison_rows_includes_extended_column_when_present():
     rows = build_comparison_rows(outcome)
     assert "top_speed_kmph" in rows[0]
     assert rows[0]["top_speed_kmph"] == 200.0
-    assert rows[1]["top_speed_kmph"] == "N/A"  # missing for B, shown not silently dropped
+    # None, NOT the string "N/A" -- see test_rows_are_arrow_serializable below.
+    assert rows[1]["top_speed_kmph"] is None
+
+
+def test_rows_are_arrow_serializable():
+    """Regression: numeric columns used to hold the string "N/A" for missing
+    values, so a column mixed floats and strings and st.dataframe() raised
+    ArrowInvalid ("Could not convert 'N/A' with type str: tried to convert
+    to double"). Streamlit serializes via PyArrow, so exercise that directly.
+    """
+    import pandas as pd
+    import pyarrow as pa
+
+    outcome = RetrievalOutcome(
+        mode="exact",
+        results=[_merged("A", {"boot_space_l": 447.0}), _merged("B", {"boot_space_l": None})],
+        original_constraints=None,
+    )
+    rows = build_comparison_rows(outcome)
+    table = pa.Table.from_pandas(pd.DataFrame(rows))  # must not raise
+    # The column must stay numeric so the UI table can sort by it.
+    assert pa.types.is_floating(table.schema.field("boot_space_l").type)
+
+
+def test_no_numeric_column_holds_a_string():
+    outcome = RetrievalOutcome(
+        mode="exact",
+        results=[_merged("A", {"boot_space_l": 447.0}), _merged("B")],
+        original_constraints=None,
+    )
+    numeric_cols = {"price_lakhs", "seating_capacity", "top_speed_kmph", "boot_space_l",
+                    "ground_clearance_mm", "mileage_max_kmpl", "engine_max_cc"}
+    for row in build_comparison_rows(outcome):
+        for col, value in row.items():
+            if col in numeric_cols:
+                assert value is None or isinstance(value, (int, float)), f"{col}={value!r}"
 
 
 def test_build_comparison_rows_drops_all_none_extended_columns():
@@ -41,3 +76,12 @@ def test_build_comparison_rows_formats_fuel_types_as_string():
     )
     rows = build_comparison_rows(outcome)
     assert rows[0]["fuel_types"] == "Petrol, Diesel"
+
+
+def test_context_table_renders_missing_values_as_na():
+    # The text table still shows "N/A" even though the rows carry None.
+    from src.rag.context_builder import _format_table
+
+    rendered = _format_table([{"name": "A", "boot_space_l": 447.0}, {"name": "B", "boot_space_l": None}])
+    assert "N/A" in rendered
+    assert "447.0" in rendered
