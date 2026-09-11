@@ -1,7 +1,19 @@
 import json
+
+import pytest
 from unittest.mock import MagicMock, patch
 
-from src.query.ollama_client import OllamaError, chat_long_form, chat_text, is_reachable, looks_like_rambling
+import config
+from src.query.ollama_client import (
+    OllamaError,
+    _partial_json_string,
+    chat,
+    chat_long_form,
+    chat_text,
+    chat_text_stream,
+    is_reachable,
+    looks_like_rambling,
+)
 
 
 def test_is_reachable_true_when_list_succeeds():
@@ -100,3 +112,62 @@ def test_chat_long_form_passes_no_format_schema():
     with patch("src.query.ollama_client.chat", return_value="clean answer") as mock_chat:
         chat_long_form(messages=[{"role": "user", "content": "explain this"}])
     assert mock_chat.call_args.kwargs["format"] is None
+
+
+# ---------------------------------------------------------------------------
+# Streaming: incremental decode of the {"result": "..."} schema wrapper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "buffer,expected",
+    [
+        ('{"resu', None),  # key not yet complete
+        ('{"result"', None),  # opening quote of the value not yet seen
+        ('{"result": "', ""),  # value started, nothing in it yet
+        ('{"result": "Hello', "Hello"),  # mid-stream partial
+        ('{"result": "Hello world"}', "Hello world"),  # complete
+        ('{"result": "line1\\nline2"}', "line1\nline2"),  # escaped newline decoded
+        ('{"result": "say \\"hi\\""}', 'say "hi"'),  # escaped quotes don't end the string
+        ('{"result": "trailing esc\\', "trailing esc"),  # half-streamed escape stops cleanly
+    ],
+)
+def test_partial_json_string(buffer, expected):
+    assert _partial_json_string(buffer, "result") == expected
+
+
+def test_chat_text_stream_yields_only_prose_deltas():
+    # The wire format is JSON, but callers must only ever see the prose.
+    chunks = ['{"resu', 'lt": "Aff', "ordable SUV", 's like the Nexon."}']
+    fake_stream = [{"message": {"content": c}} for c in chunks]
+
+    with patch("src.query.ollama_client.ollama.Client") as mock_client_cls:
+        mock_client_cls.return_value.chat.return_value = fake_stream
+        out = list(chat_text_stream(messages=[{"role": "user", "content": "suvs?"}]))
+
+    assert "".join(out) == "Affordable SUVs like the Nexon."
+    assert not any("{" in piece or "result" in piece for piece in out)
+
+
+def test_chat_text_stream_requests_streaming_and_schema():
+    with patch("src.query.ollama_client.ollama.Client") as mock_client_cls:
+        mock_client_cls.return_value.chat.return_value = []
+        list(chat_text_stream(messages=[{"role": "user", "content": "hi"}]))
+
+    kwargs = mock_client_cls.return_value.chat.call_args.kwargs
+    assert kwargs["stream"] is True
+    assert kwargs["format"]["properties"]["result"]["type"] == "string"
+
+
+def test_chat_text_stream_wraps_errors_as_ollama_error():
+    with patch("src.query.ollama_client.ollama.Client") as mock_client_cls:
+        mock_client_cls.return_value.chat.side_effect = ConnectionError("refused")
+        with pytest.raises(OllamaError):
+            list(chat_text_stream(messages=[{"role": "user", "content": "hi"}]))
+
+
+def test_chat_passes_keep_alive():
+    with patch("src.query.ollama_client.ollama.Client") as mock_client_cls:
+        mock_client_cls.return_value.chat.return_value = {"message": {"content": "x"}}
+        chat(messages=[{"role": "user", "content": "hi"}])
+    assert mock_client_cls.return_value.chat.call_args.kwargs["keep_alive"] == config.OLLAMA_KEEP_ALIVE

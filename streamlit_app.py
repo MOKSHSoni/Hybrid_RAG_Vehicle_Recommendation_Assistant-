@@ -4,6 +4,7 @@ Run with: streamlit run streamlit_app.py
 """
 
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -14,6 +15,7 @@ from src.app.orchestrator import Pipeline, answer_query
 from src.query.models import ConversationTurn
 from src.query.ollama_client import is_reachable
 from src.rag.comparison import build_comparison_rows
+from src.rag.generation import generate_answer_stream, needs_regeneration, regenerate_long_form
 
 st.set_page_config(page_title="Car Sales Assistant", page_icon="🚗", layout="wide")
 
@@ -166,16 +168,42 @@ def main() -> None:
             st.markdown(user_input)
 
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
+            # Retrieval first (fast), then stream generation -- generation is
+            # by far the slowest stage, so streaming it drops perceived
+            # latency from "minutes of spinner" to "prose within seconds".
+            with st.spinner("Understanding your request and searching..."):
                 try:
                     result = answer_query(
-                        pipeline, user_input, st.session_state.history, include_expansion_hyde_debug=show_experimental
+                        pipeline,
+                        user_input,
+                        st.session_state.history,
+                        include_expansion_hyde_debug=show_experimental,
+                        generate=False,
                     )
                 except Exception as e:
                     st.error(f"Something went wrong while answering: {e}")
                     st.stop()
 
-            st.markdown(result.answer)
+            answer_slot = st.empty()
+            started = time.time()
+            try:
+                with answer_slot.container():
+                    answer = st.write_stream(
+                        generate_answer_stream(user_input, result.outcome, pipeline.kb.chunk_store)
+                    )
+            except Exception as e:
+                st.error(f"Something went wrong while writing the answer: {e}")
+                st.stop()
+
+            # The quality checks need the whole text, so they run post-stream;
+            # a failed check replaces what was streamed via the slower path.
+            if needs_regeneration(answer, result.outcome):
+                with st.spinner("That answer came out garbled -- rewriting it..."):
+                    answer = regenerate_long_form(user_input, result.outcome, pipeline.kb.chunk_store)
+                answer_slot.markdown(answer)
+
+            result.answer = answer
+            result.log.add_timing("generation (streamed)", (time.time() - started) * 1000)
             render_result(result)
 
         st.session_state.messages.append({"role": "assistant", "content": result.answer, "result": result})

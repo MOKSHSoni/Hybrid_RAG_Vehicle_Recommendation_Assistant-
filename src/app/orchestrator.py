@@ -74,7 +74,13 @@ def answer_query(
     query: str,
     history: List[ConversationTurn],
     include_expansion_hyde_debug: bool = False,
+    generate: bool = True,
 ) -> TurnResult:
+    """Set generate=False to run everything except the final generation
+    stage -- used by the Streamlit UI, which streams generation itself so
+    the user sees prose as it arrives rather than waiting on the slowest
+    stage in silence. The returned TurnResult then carries an empty
+    `answer`, and the caller is responsible for producing one."""
     log = PipelineLog()
 
     t0 = time.time()
@@ -110,9 +116,11 @@ def answer_query(
     log.candidate_count = len(outcome.results)
     log.final_chunk_ids = [m.best_chunk.chunk_id for m in outcome.results]
 
-    t0 = time.time()
-    answer = generate_answer(query, outcome, pipeline.kb.chunk_store)
-    log.add_timing("generation", (time.time() - t0) * 1000)
+    answer = ""
+    if generate:
+        t0 = time.time()
+        answer = generate_answer(query, outcome, pipeline.kb.chunk_store)
+        log.add_timing("generation", (time.time() - t0) * 1000)
 
     expansion_queries = None
     hyde_description = None

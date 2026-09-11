@@ -10,7 +10,8 @@ endpoint again).
 """
 
 import json
-from typing import Any, Dict, Optional, Tuple
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 import config
 from src.query.models import Constraints
@@ -75,6 +76,40 @@ JSON_SCHEMA: Dict[str, Any] = {
 
 _NUMERIC_RANGE_KEYS = [k for k in JSON_SCHEMA["required"] if k.endswith(("_min", "_max"))]
 
+# The original 7-field schema, used for queries that mention no numeric spec
+# and no superlative -- see needs_extended_extraction() for the latency
+# rationale. Deliberately derived from JSON_SCHEMA rather than duplicated, so
+# the two can't drift apart.
+_CORE_FIELDS = [
+    "brand",
+    "fuel_types",
+    "transmission",
+    "seating_capacity",
+    "body_type",
+    "price_max_lakhs",
+    "price_min_lakhs",
+]
+CORE_JSON_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {k: JSON_SCHEMA["properties"][k] for k in _CORE_FIELDS},
+    "required": list(_CORE_FIELDS),
+}
+
+# Intentionally broad: a false positive only costs latency, a false negative
+# denies the LLM a phrasing regex can't parse. Covers metric vocabulary plus
+# superlative morphology ("-est", most/least/best/worst).
+_EXTENDED_TRIGGER_RE = re.compile(
+    r"\b("
+    r"speed|fast|quick|kmph|km/h|mph"
+    r"|boot|trunk|cargo|luggage"
+    r"|clearance"
+    r"|mileage|millage|economy|economical|efficien\w*|kmpl"
+    r"|engine|cc|litre|liter|displacement|power|powerful"
+    r"|\w+est|most|least|best|worst"
+    r")\b",
+    re.IGNORECASE,
+)
+
 _SYSTEM_PROMPT = f"""You extract structured vehicle search constraints from a user's query.
 Respond with ONLY a JSON object matching this schema -- no explanation, no markdown fences:
 {{
@@ -113,24 +148,66 @@ superlative_field=null (NOT price_lakhs/asc) -- the user wants options within bu
 one cheapest vehicle."""
 
 
+_CORE_SYSTEM_PROMPT = f"""You extract structured vehicle search constraints from a user's query.
+Respond with ONLY a JSON object matching this schema -- no explanation, no markdown fences:
+{{
+  "brand": string or null,
+  "fuel_types": array of strings (e.g. ["Petrol"], ["Diesel","Petrol"], or [] if unspecified),
+  "transmission": string or null,
+  "seating_capacity": integer or null,
+  "body_type": string or null,
+  "price_max_lakhs": number or null,
+  "price_min_lakhs": number or null
+}}
+Only set a field when the query actually states or clearly implies it; otherwise use null ([] for fuel_types).
+Valid body_type values: {", ".join(config.VALID_BODY_TYPES)}
+Valid fuel_types values: {", ".join(config.VALID_FUEL_TYPES)}
+Valid transmission values: {", ".join(config.VALID_TRANSMISSIONS)}
+price_max_lakhs / price_min_lakhs are in Lakhs INR (1 Crore = 100 Lakhs).
+Note: "affordable"/"budget-friendly"/"cheap" describe a price RANGE -- set price_max_lakhs if a
+number is given or implied, and do not treat them as a request for the single cheapest vehicle."""
+
+def needs_extended_extraction(query: str) -> bool:
+    """Whether a query is worth paying the full 19-field schema for.
+
+    Grammar-constrained decoding must emit every `required` key, so
+    latency scales with field count -- measured on the target hardware at
+    5.3s for the 7-field core schema vs 14.2s for the full 19-field one
+    (2.7x, matching the 19/7 field ratio almost exactly). Most queries
+    never mention a numeric spec or a superlative, so they shouldn't pay
+    for 12 keys that come back null.
+
+    The net here is deliberately WIDER than regex_extraction's precise
+    phrase tables: this only decides which schema to send, and a false
+    positive merely costs latency, whereas a false negative would deny
+    the LLM the chance to parse a phrasing regex can't handle (e.g. "how
+    fast does it go", "roomiest boot"). When in doubt, escalate.
+    """
+    return bool(_EXTENDED_TRIGGER_RE.search(query))
+
+
 def extract_constraints_via_llm(standalone_query: str) -> Constraints:
     """May raise src.query.ollama_client.OllamaError (propagated, not
     retried) or ValueError (after exhausting retries on invalid output)."""
+    extended = needs_extended_extraction(standalone_query)
+    schema = JSON_SCHEMA if extended else CORE_JSON_SCHEMA
+    system_prompt = _SYSTEM_PROMPT if extended else _CORE_SYSTEM_PROMPT
+
     last_error = None
     for _ in range(config.EXTRACTION_RETRY_COUNT + 1):
         raw = chat(
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": standalone_query},
             ],
-            format=JSON_SCHEMA,
+            format=schema,
         )
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as e:
             last_error = f"invalid JSON from model: {e}; raw={raw!r}"
             continue
-        if not _validate_schema(data):
+        if not _validate_schema(data, required=schema["required"]):
             last_error = f"schema validation failed: {data!r}"
             continue
         return _to_constraints(data)
@@ -138,10 +215,10 @@ def extract_constraints_via_llm(standalone_query: str) -> Constraints:
     raise ValueError(last_error)
 
 
-def _validate_schema(data: Any) -> bool:
+def _validate_schema(data: Any, required: Optional[List[str]] = None) -> bool:
     if not isinstance(data, dict):
         return False
-    required = JSON_SCHEMA["required"]
+    required = required if required is not None else JSON_SCHEMA["required"]
     if not all(key in data for key in required):
         return False
 
@@ -155,27 +232,31 @@ def _validate_schema(data: Any) -> bool:
         return False
     if data["body_type"] is not None and not isinstance(data["body_type"], str):
         return False
+    # .get() from here down: these keys are required by the full schema but
+    # legitimately absent from a CORE_JSON_SCHEMA response.
     for key in ("price_max_lakhs", "price_min_lakhs", *_NUMERIC_RANGE_KEYS):
-        value = data[key]
+        value = data.get(key)
         if value is not None and not isinstance(value, (int, float)):
             return False
-    if data["superlative_field"] is not None and not isinstance(data["superlative_field"], str):
+    if data.get("superlative_field") is not None and not isinstance(data.get("superlative_field"), str):
         return False
-    if data["superlative_direction"] is not None and not isinstance(data["superlative_direction"], str):
+    if data.get("superlative_direction") is not None and not isinstance(data.get("superlative_direction"), str):
         return False
     return True
 
 
 def _to_constraints(data: Dict[str, Any]) -> Constraints:
-    transmission = data["transmission"]
+    # .get() throughout, not [] -- a CORE_JSON_SCHEMA response legitimately
+    # omits the 12 extended keys.
+    transmission = data.get("transmission")
     if transmission not in config.VALID_TRANSMISSIONS:
         transmission = None  # model hallucinated a value outside the enum -- treat as unset, don't guess
 
-    body_type = data["body_type"]
+    body_type = data.get("body_type")
     if body_type not in config.VALID_BODY_TYPES:
         body_type = None
 
-    fuel_types = [f for f in data["fuel_types"] if f in config.VALID_FUEL_TYPES]
+    fuel_types = [f for f in (data.get("fuel_types") or []) if f in config.VALID_FUEL_TYPES]
 
     numeric_ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
     for canonical_field, schema_prefix in _NUMERIC_RANGE_FIELDS.items():
@@ -183,19 +264,19 @@ def _to_constraints(data: Dict[str, Any]) -> Constraints:
         if min_v is not None or max_v is not None:
             numeric_ranges[canonical_field] = (min_v, max_v)
 
-    superlative_field = data["superlative_field"]
-    superlative_direction = data["superlative_direction"]
+    superlative_field = data.get("superlative_field")
+    superlative_direction = data.get("superlative_direction")
     if superlative_field not in _SUPERLATIVE_FIELDS or superlative_direction not in ("asc", "desc"):
         superlative_field, superlative_direction = None, None  # hallucinated/malformed -- don't guess
 
     return Constraints(
-        brand=data["brand"],
+        brand=data.get("brand"),
         fuel_types=fuel_types,
         transmission=transmission,
-        seating_capacity=data["seating_capacity"],
+        seating_capacity=data.get("seating_capacity"),
         body_type=body_type,
-        price_max_lakhs=data["price_max_lakhs"],
-        price_min_lakhs=data["price_min_lakhs"],
+        price_max_lakhs=data.get("price_max_lakhs"),
+        price_min_lakhs=data.get("price_min_lakhs"),
         numeric_ranges=numeric_ranges,
         superlative_field=superlative_field,
         superlative_direction=superlative_direction,

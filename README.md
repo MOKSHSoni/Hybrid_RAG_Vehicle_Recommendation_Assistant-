@@ -81,7 +81,16 @@ good mileage"*), continue with follow-ups (*"what about diesel
 options?"*), and see recommendations labeled Exact / Relaxed / Fallback
 with an optional debug panel (query understanding, retrieval internals,
 per-stage timings, and — if enabled — informational query
-expansion/HyDE output).
+expansion/HyDE output). The answer streams in as it's generated.
+
+**`.streamlit/config.toml` sets `fileWatcherType = "none"` on purpose.**
+Streamlit's hot-reload watcher inspects every loaded module, and
+`transformers`' lazy `__getattr__` turns that inspection into real imports
+of unrelated vision models — one of which needs `torchvision`, which this
+text-only project deliberately doesn't install. The result is a
+`ModuleNotFoundError` traceback on every rerun. Disabling the watcher
+avoids it; the only cost is that source edits need an app restart rather
+than hot-reloading.
 
 ### Phase-by-phase demos
 Each phase has a standalone, runnable demo proving it works in isolation:

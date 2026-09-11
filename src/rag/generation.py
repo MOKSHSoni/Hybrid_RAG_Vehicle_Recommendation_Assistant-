@@ -28,8 +28,16 @@ one-sentence truncated non-answer on another, both at temperature=0):
 Any of the three routes to the same chat_long_form() fallback (slower,
 but reliably complete; see ollama_client.py's module docstring)."""
 
+from typing import Iterator
+
 import config
-from src.query.ollama_client import OllamaError, chat_long_form, chat_text, looks_like_rambling
+from src.query.ollama_client import (
+    OllamaError,
+    chat_long_form,
+    chat_text,
+    chat_text_stream,
+    looks_like_rambling,
+)
 from src.rag.context_builder import build_context_block
 from src.retrieval.chunk_store import ChunkStore
 from src.retrieval.modes import RetrievalOutcome
@@ -71,22 +79,29 @@ first -- you already have everything you need in the data below."""
 _ECHO_MARKERS = ("RETRIEVED VEHICLES", "RETRIEVAL MODE:", "[Vehicle 1]", "[Vehicle 2]")
 
 
+NO_RESULTS_MESSAGE = (
+    "I couldn't find any vehicles matching your request, even after relaxing several "
+    "constraints. Could you try a broader or different query?"
+)
+
+
+def _build_messages(query: str, outcome: RetrievalOutcome, chunk_store: ChunkStore):
+    context = build_context_block(outcome, chunk_store)
+    prompt = f"User request: {query}\n\n{context}\n\nWrite the recommendation response now."
+    return [{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+
+
 def generate_answer(query: str, outcome: RetrievalOutcome, chunk_store: ChunkStore) -> str:
     """Returns the final natural-language answer, or a graceful,
     non-crashing error message if the Ollama call fails/times out."""
     if not outcome.results:
-        return (
-            "I couldn't find any vehicles matching your request, even after relaxing several "
-            "constraints. Could you try a broader or different query?"
-        )
+        return NO_RESULTS_MESSAGE
 
-    context = build_context_block(outcome, chunk_store)
-    prompt = f"User request: {query}\n\n{context}\n\nWrite the recommendation response now."
-    messages = [{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
+    messages = _build_messages(query, outcome, chunk_store)
 
     try:
         answer = chat_text(messages=messages, timeout=config.GENERATION_FALLBACK_TIMEOUT_SECONDS)
-        if looks_like_rambling(answer) or _looks_like_context_echo(answer) or _looks_incomplete(answer, outcome):
+        if needs_regeneration(answer, outcome):
             # The fast schema path rambled, echoed the raw context back, or
             # trailed off incomplete -- fall back to letting the model think
             # freely (slower, ~tens of seconds, but reliably a real written
@@ -97,18 +112,67 @@ def generate_answer(query: str, outcome: RetrievalOutcome, chunk_store: ChunkSto
         return _fallback_message(outcome, e)
 
 
+def generate_answer_stream(query: str, outcome: RetrievalOutcome, chunk_store: ChunkStore) -> Iterator[str]:
+    """Streaming counterpart to generate_answer(), for the UI.
+
+    Generation is by far the slowest stage (measured at ~30-210s on the
+    target CPU-only hardware, scaling with how many vehicles it has to
+    write about), so streaming is purely a perceived-latency win: the user
+    sees prose within a few seconds instead of staring at a spinner.
+
+    The quality checks generate_answer() relies on can only run once the
+    full text exists, so they are NOT applied here -- the caller streams
+    this, then asks needs_regeneration() about the accumulated text and
+    calls regenerate_long_form() to replace it if required.
+    """
+    if not outcome.results:
+        yield NO_RESULTS_MESSAGE
+        return
+
+    messages = _build_messages(query, outcome, chunk_store)
+    try:
+        for delta in chat_text_stream(messages=messages, timeout=config.GENERATION_FALLBACK_TIMEOUT_SECONDS):
+            yield delta
+    except OllamaError as e:
+        yield _fallback_message(outcome, e)
+
+
+def needs_regeneration(answer: str, outcome: RetrievalOutcome) -> bool:
+    """Whether an answer failed any of the three quality checks and should
+    be replaced via the slower, more reliable long-form path."""
+    return looks_like_rambling(answer) or _looks_like_context_echo(answer) or _looks_incomplete(answer, outcome)
+
+
+def regenerate_long_form(query: str, outcome: RetrievalOutcome, chunk_store: ChunkStore) -> str:
+    try:
+        return chat_long_form(messages=_build_messages(query, outcome, chunk_store))
+    except OllamaError as e:
+        return _fallback_message(outcome, e)
+
+
 def _looks_like_context_echo(answer: str) -> bool:
     return any(marker in answer for marker in _ECHO_MARKERS)
+
+
+_MIN_ANSWER_CHARS = 60
 
 
 def _looks_incomplete(answer: str, outcome: RetrievalOutcome) -> bool:
     """Catches a real observed failure mode: a short preamble sentence
     ("Here's the recommendation:") with the model then stopping before
-    ever actually naming a vehicle."""
-    if len(answer) < 100:
-        return True
+    ever actually naming a vehicle.
+
+    Naming a retrieved vehicle is the primary signal -- a truncated answer
+    essentially never gets that far. The length floor is only a secondary
+    guard against a degenerate reply that IS just a bare vehicle name. An
+    earlier version applied the length floor unconditionally, which
+    misfired on terse-but-valid answers and sent them through a needless
+    (and very slow) regeneration.
+    """
     names = (m.best_chunk.metadata.get("name") for m in outcome.results)
-    return not any(name and name in answer for name in names)
+    if not any(name and name in answer for name in names):
+        return True
+    return len(answer) < _MIN_ANSWER_CHARS
 
 
 def _fallback_message(outcome: RetrievalOutcome, error: OllamaError) -> str:
