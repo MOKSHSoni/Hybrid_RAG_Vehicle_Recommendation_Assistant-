@@ -12,13 +12,28 @@ from src.pipeline import build_knowledge_base
 from src.query.ollama_client import OllamaError, chat_text
 
 
+# Generous enough to absorb a cold model load (~70s measured), so tests
+# skip only when Ollama is genuinely unavailable.
+_OLLAMA_PROBE_TIMEOUT_SECONDS = 150
+
+
 def _ollama_available() -> bool:
+    """Probe Ollama, and in doing so warm the model for the whole session.
+
+    The timeout is deliberately generous. It was 10s, which quietly broke
+    the suite: loading qwen3:4b from cold was measured at 70s on this
+    hardware, so whenever the model had been evicted the probe failed and
+    EVERY live-LLM test silently skipped. A silent skip is worse than a
+    failure -- it looks like coverage while providing none.
+
+    Routed through chat_text (schema-wrapped) rather than a raw chat()
+    call, for the thinking-suppression reason in ollama_client.py.
+    """
     try:
-        # Routed through chat_text (schema-wrapped), not raw chat() --
-        # an unconstrained chat() call is subject to Qwen3's ~15s
-        # thinking-mode latency (see ollama_client.py) and would make
-        # this probe itself flaky/slow. chat_text is reliably fast.
-        chat_text(messages=[{"role": "user", "content": "reply with the single word: ok"}], timeout=10)
+        chat_text(
+            messages=[{"role": "user", "content": "reply with the single word: ok"}],
+            timeout=_OLLAMA_PROBE_TIMEOUT_SECONDS,
+        )
         return True
     except OllamaError:
         return False

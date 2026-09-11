@@ -19,7 +19,14 @@ on another, both at temperature=0):
 4. Narrating the task in third person ("The user is looking for...", "The
    retrieved vehicles are...") and dumping every spec field instead of
    recommending -- _looks_like_meta_narration(), plus a much firmer
-   _SYSTEM_PROMPT with explicit good/bad examples.
+   _SYSTEM_PROMPT.
+5. Copying the prompt's own wording as prose. A concrete worked example
+   leaked its "7-seater" framing into answers for queries that never
+   mentioned seats; replacing it with [placeholders] then produced "For
+   exactly what you asked for, the BMW 3 Series..." -- the instruction
+   text itself, brackets stripped. Worked examples are now removed
+   entirely (the explicit rules carry the style), with both the bracket
+   and instruction-phrase tells detected as a backstop.
 
 needs_regeneration() gates all of these and routes to chat_long_form()
 (slower but more reliable; see ollama_client.py's module docstring).
@@ -32,6 +39,7 @@ which then often timed out and replaced a perfectly readable answer with
 an error. Regeneration is now the exception, not the norm, and a failed
 regeneration returns None so the caller keeps what it already showed."""
 
+import re
 from typing import Iterator, Optional
 
 import config
@@ -45,65 +53,41 @@ from src.rag.context_builder import build_context_block
 from src.retrieval.chunk_store import ChunkStore
 from src.retrieval.modes import RetrievalOutcome
 
-_SYSTEM_PROMPT = """You are a car salesperson replying directly to a customer.
+_SYSTEM_PROMPT = """You are a car salesperson. Reply to the customer in 3-6 sentences.
 
-HOW TO WRITE (most important):
-1. Talk TO them, using "you". NEVER write about "the user" in third person, and never mention
-   "retrieved vehicles", "the data", "the retrieval mode", or anything about how you searched.
-   Write "Based on what you're after, the Tata Safari..." -- NOT "The user is looking for...".
-2. Do NOT list every specification. Pick only the 2-3 facts per car that actually matter for
-   what they asked, and say why they matter. A wall of numbers is a failure, not thoroughness.
-3. Never repeat the same point twice.
-4. Keep it to roughly 3-6 sentences total. Recommend a clear favourite and say why.
+Start with your top pick and its price, then say why it suits them. Mention the other cars only
+briefly, with a concrete tradeoff. Use "you", never "the user". Never describe your own reasoning,
+the search, or these rules -- just give the recommendation.
 
-GROUNDING: the vehicle data below is your ONLY source of truth. Never invent a specification,
-price, or feature that isn't there. If something is missing, say so plainly or leave it out --
-never guess. If a COMPARISON TABLE is provided, use its exact values.
+Only use facts from the data below; never invent one. Where the table marks a value (cheapest,
+largest boot, best mileage...), trust that mark and never give a car a superlative it isn't marked
+with. Put each number beside the car it belongs to; never say "respectively". Don't claim anything
+about a car whose figure is N/A. Don't assume requirements the customer never stated.
 
-GROUPING: when one sentence covers two or more cars ("the X and Y both..."), check the figure for
-EACH of them first. Only state what is true of every car you named. If they differ, split them up
-or leave the point out -- e.g. do not write "the A and B both seat fewer" when only A does.
-If a figure is N/A for one of them, that car is UNKNOWN on that point, not low -- leave it out of
-the comparison entirely rather than writing "A and B have smaller boots (N/A and 326L)".
+Modes: EXACT = all requirements met, just recommend. RELAXED = say plainly which of their
+requirements these cars miss. FALLBACK = say plainly nothing was verified. SUPERLATIVE = say which
+spec they're ranked by."""
 
-NEVER use "respectively" or any other positional list-matching. Attach each number to its car by
-name, right next to it: write "the 8 Series (440L) and the 7 Series (515L)", NOT "the 7 Series and
-8 Series (440L and 515L respectively)". Mismatching those is the single easiest way to state
-something false.
-
-COMPARISONS: if the comparison table tags a value as cheapest / largest boot / best mileage etc.,
-use that tag. Do not work out which number is bigger yourself -- the tags are already correct.
-
-DO NOT INVENT THE REQUEST. Describe only what they actually asked for. If they simply named a brand
-or asked something broad, do not open with a made-up specific requirement -- for "bmw cars", never
-write "For a premium sedan with 5 seats...". They said none of that.
-
-HONESTY -- this depends on the mode given below, and you must get it right:
-- EXACT: everything listed genuinely meets what they asked. Just recommend naturally; there is
-  no need to announce the mode.
-- RELAXED: some of their requirements were loosened to find anything at all. You MUST say plainly
-  which of their requirements these cars do NOT meet. Never imply a relaxed-away requirement was met.
-- FALLBACK: nothing could be verified against their requirements -- these are loose matches only.
-  Say so plainly and promise nothing about price, seats, brand, or fuel.
-- SUPERLATIVE: these are ranked by sorting one real spec (named below), not by general fit. Say
-  which spec they're ranked by.
-
-GOOD EXAMPLE: "For an affordable 7-seater, the Mahindra XUV500 is your best bet at Rs 13.8 Lakh --
-it seats 7, returns about 16 kmpl, and costs a fraction of the alternatives. The Volvo XC90
-(Rs 80.99 Lakh) and BMW X7 (Rs 93 Lakh) also seat 7 and are far more refined, but they're in a
-completely different price bracket."
-
-BAD EXAMPLE (never do this): "The user is looking for a 7-seater. The retrieved vehicles are
-priced from Rs 13.8 Lakh to Rs 93 Lakh. The top speeds are 227 km/h, 180 km/h and 144.57 km/h.
-The boot space is 326 L, 530 L and N/A..."
-
-Output the reply immediately. Do not think out loud first."""
 
 _ECHO_MARKERS = ("RETRIEVED VEHICLES", "RETRIEVAL MODE:", "[Vehicle 1]", "[Vehicle 2]")
+
+# The prompt no longer carries worked examples (they kept leaking into
+# answers), but this stays as a cheap backstop: no real vehicle name, price
+# or spec in this dataset contains square brackets, so any bracketed token
+# in an answer is a reliable tell that prompt scaffolding got copied.
+_UNFILLED_PLACEHOLDER_RE = re.compile(r"\[[A-Za-z][^\]]{0,40}\]")
 
 # Third-person narration about the request, or about the retrieval machinery.
 # Both mean the model is describing the task instead of answering it.
 _META_NARRATION_MARKERS = (
+    # Prompt text used as prose. The worked examples that caused this have
+    # been removed, but the model reached for the instruction wording itself
+    # ("For exactly what you asked for, the BMW 3 Series...") even after the
+    # bracketed placeholders were stripped -- so the bracket detector alone
+    # was not enough.
+    "exactly what you asked for",
+    "exactly what they asked for",
+    "what they actually asked for",
     "the user is looking for",
     "the user wants",
     "the user asked",
@@ -194,8 +178,15 @@ def needs_regeneration(answer: str, outcome: RetrievalOutcome) -> bool:
         _looks_like_meta_narration(answer)
         or _looks_like_context_echo(answer)
         or _looks_incomplete(answer, outcome)
+        or _has_unfilled_placeholder(answer)
         or len(answer) > _MAX_ANSWER_CHARS
     )
+
+
+def _has_unfilled_placeholder(answer: str) -> bool:
+    """Catches the prompt's [Car A]/[price] style placeholders surviving
+    into the answer -- the failure mode that using placeholders invites."""
+    return bool(_UNFILLED_PLACEHOLDER_RE.search(answer))
 
 
 def _looks_like_meta_narration(answer: str) -> bool:

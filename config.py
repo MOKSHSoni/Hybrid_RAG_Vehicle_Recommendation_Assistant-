@@ -64,10 +64,15 @@ OLLAMA_HOST = "http://127.0.0.1:11434"
 OLLAMA_MODEL = "qwen3:4b"  # Q4_K_M quantization (Ollama's default tag for this size)
 OLLAMA_TIMEOUT_SECONDS = 60
 OLLAMA_TEMPERATURE = 0.0  # deterministic extraction/rewriting
-# How long Ollama keeps the model resident after a call. The default (5m)
-# means an idle session pays a multi-second reload on its next query; this
-# dataset is small enough that keeping a 2.5GB model warm is a fine trade.
-OLLAMA_KEEP_ALIVE = "30m"
+# How long Ollama keeps the model resident after a call. Trades warm-start
+# latency against RAM: qwen3:4b holds ~3.4GB resident in llama-server.
+# 30m was tried first and proved too aggressive on the 16GB target laptop --
+# with Streamlit (which loads its own torch models) plus an editor and a
+# browser, free memory fell to ~2GB and fresh Python processes could no
+# longer start, which surfaced as generation ReadTimeouts that looked like
+# model slowness but were actually memory starvation. 10m keeps a working
+# session warm without pinning the model for half an hour of idle.
+OLLAMA_KEEP_ALIVE = "10m"
 # Longer timeout for chat_long_form()'s fallback path (Phase 11), which lets
 # the model think freely rather than forcing fast schema-constrained output.
 # Observed during development: immediately after a long run of back-to-back
