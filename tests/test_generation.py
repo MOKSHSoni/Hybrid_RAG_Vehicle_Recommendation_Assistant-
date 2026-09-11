@@ -10,6 +10,7 @@ from src.rag.generation import (
     generate_answer,
     generate_answer_stream,
     needs_regeneration,
+    regenerate_long_form,
 )
 from src.reranking.cross_encoder import CrossEncoderReranker
 from src.retrieval.bm25.retriever import BM25Retriever
@@ -170,6 +171,57 @@ def test_generate_answer_stream_degrades_gracefully_on_ollama_error(knowledge_ba
     assert "Porsche Macan" in out  # vehicle still surfaced despite the failure
 
 
+def test_needs_regeneration_accepts_a_long_legitimate_answer(knowledge_base):
+    # Regression: needs_regeneration used to call looks_like_rambling(),
+    # whose 500-char ceiling is meant for one-line rewrites. Any genuine
+    # multi-vehicle recommendation exceeds it, so EVERY substantive answer
+    # was sent down the slow regeneration path (which then often timed out).
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+
+    long_but_good = (
+        "For a versatile SUV, the Porsche Macan is the standout here at Rs 69.98 Lakh. "
+        "It seats five, runs on petrol, and pairs genuine sports-car handling with enough "
+        "boot space for a weekend away, which is a rare combination at this size. "
+        "The cabin is also considerably better finished than most rivals in the segment, "
+        "so it works just as well as an everyday car as it does on a back road. "
+        "If your budget stretches, the larger models offer more space, but you give up "
+        "the agility that makes the Macan worth having in the first place."
+    )
+    assert len(long_but_good) > 500  # the exact case the old check got wrong
+    assert needs_regeneration(long_but_good, outcome) is False
+
+
+def test_needs_regeneration_flags_third_person_narration(knowledge_base):
+    # The real answer that prompted this fix: written ABOUT the request
+    # rather than TO the person, and dumping every spec field.
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+
+    narrated = (
+        "The user is looking for an affordable 7-seater vehicle. The retrieved vehicles are all "
+        "priced at approximately Rs 13.8 Lakh to Rs 93 Lakh. The Porsche Macan top speed is 254 km/h."
+    )
+    assert needs_regeneration(narrated, outcome) is True
+
+
+def test_needs_regeneration_flags_runaway_length(knowledge_base):
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+    runaway = "The Porsche Macan is great. " * 200  # ~5600 chars
+    assert needs_regeneration(runaway, outcome) is True
+
+
+def test_regenerate_long_form_returns_none_on_failure(knowledge_base):
+    # None, not an error string -- the caller has already shown the user a
+    # readable answer and must not replace it with "Sorry, I couldn't...".
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+
+    with patch("src.rag.generation.chat_long_form", side_effect=OllamaError("timed out")):
+        assert regenerate_long_form("affordable SUV", outcome, knowledge_base.chunk_store) is None
+
+
 def test_needs_regeneration_flags_each_failure_mode(knowledge_base):
     merged = _merged_for_macan(knowledge_base.chunk_store)
     outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
@@ -195,6 +247,10 @@ def test_generate_answer_real_end_to_end(knowledge_base):
     answer = generate_answer(query, outcome, knowledge_base.chunk_store)
 
     assert len(answer) > 20
-    assert "exact" in answer.lower() or outcome.mode != "exact"
     # At least one retrieved vehicle's real name should be mentioned -- grounding, not invention.
     assert any(m.best_chunk.metadata["name"] in answer for m in outcome.results)
+    # No mode announcement is expected for EXACT: the UI shows a mode badge,
+    # and requiring the model to state it verbatim is what produced robotic
+    # "The retrieval mode is EXACT" openers. What must hold instead is that
+    # the answer reads as a reply to the customer, not analysis about them.
+    assert not needs_regeneration(answer, outcome)

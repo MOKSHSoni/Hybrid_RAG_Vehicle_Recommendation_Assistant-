@@ -4,31 +4,35 @@ Top-K Actual Vehicle Chunks -> Context Builder -> Grounded Qwen3 Prompt ->
 Qwen3/Ollama -> Final Answer.
 
 Routed through chat_text (schema-wrapped) first, same as every other
-free-form generation call in this project, with three defenses layered on
-top after real testing surfaced three distinct failure modes on this
-specific, longer, multi-vehicle task (all confirmed to be genuine
-run-to-run sampling variance on this CPU-only setup -- e.g. the exact same
-5-vehicle prompt produced a complete, well-formed answer on one run and a
-one-sentence truncated non-answer on another, both at temperature=0):
+free-form generation call in this project. Real testing surfaced several
+distinct failure modes on this specific, longer, multi-vehicle task (all
+genuine run-to-run sampling variance on this CPU-only setup -- the exact
+same prompt produced a clean answer on one run and a truncated non-answer
+on another, both at temperature=0):
 
 1. Even the fast schema-based path occasionally exceeded the default 60s
-   Ollama timeout on a genuine (non-simulated) call explaining 5 vehicles
-   -- so generation calls use config.GENERATION_FALLBACK_TIMEOUT_SECONDS
-   throughout, not the shorter default used elsewhere.
-2. The model sometimes produces output that is technically clean (no
-   rambling markers, under the length cap) but is really just an echo of
-   the structured context block (e.g. "RETRIEVED VEHICLES (5): [Vehicle 1]
-   BMW X7, [Vehicle 2] ...") rather than actual explanatory prose --
-   caught by _looks_like_context_echo().
-3. The model sometimes stops after a short preamble sentence ("Here's the
-   recommendation:") without ever actually naming a vehicle -- caught by
-   _looks_incomplete() checking whether the answer mentions ANY retrieved
-   vehicle by name.
+   Ollama timeout -- so generation uses config.GENERATION_FALLBACK_TIMEOUT_SECONDS.
+2. Echoing the structured context block back ("RETRIEVED VEHICLES (5):
+   [Vehicle 1] BMW X7 ...") instead of writing prose -- _looks_like_context_echo().
+3. Stopping after a preamble ("Here's the recommendation:") without ever
+   naming a vehicle -- _looks_incomplete().
+4. Narrating the task in third person ("The user is looking for...", "The
+   retrieved vehicles are...") and dumping every spec field instead of
+   recommending -- _looks_like_meta_narration(), plus a much firmer
+   _SYSTEM_PROMPT with explicit good/bad examples.
 
-Any of the three routes to the same chat_long_form() fallback (slower,
-but reliably complete; see ollama_client.py's module docstring)."""
+needs_regeneration() gates all of these and routes to chat_long_form()
+(slower but more reliable; see ollama_client.py's module docstring).
 
-from typing import Iterator
+Note what needs_regeneration() deliberately does NOT use:
+ollama_client.looks_like_rambling(). Its 500-char ceiling is calibrated
+for one-line outputs, and reusing it here flagged every genuine
+multi-vehicle answer -- forcing the slow path on essentially every query,
+which then often timed out and replaced a perfectly readable answer with
+an error. Regeneration is now the exception, not the norm, and a failed
+regeneration returns None so the caller keeps what it already showed."""
+
+from typing import Iterator, Optional
 
 import config
 from src.query.ollama_client import (
@@ -36,47 +40,70 @@ from src.query.ollama_client import (
     chat_long_form,
     chat_text,
     chat_text_stream,
-    looks_like_rambling,
 )
 from src.rag.context_builder import build_context_block
 from src.retrieval.chunk_store import ChunkStore
 from src.retrieval.modes import RetrievalOutcome
 
-_SYSTEM_PROMPT = """You are a vehicle recommendation assistant. You are given a user's request
-and RETRIEVED VEHICLE DATA -- the ONLY source of truth. Never invent specifications, prices,
-or features not present in that data; if something isn't in the data, say it's not available
-rather than guessing.
+_SYSTEM_PROMPT = """You are a car salesperson replying directly to a customer.
 
-Write a genuine, natural-language recommendation -- flowing sentences, not a data dump. Do NOT
-copy the raw "[Vehicle N]" labels or repeat the retrieved text verbatim; refer to vehicles by
-name in your own sentences instead. For example, write something like: "Since you're after an
-affordable SUV under 15 Lakh, the Tata Safari (Rs 14.9 Lakh, 7 seats) is a strong match because
-..." -- not "RETRIEVED VEHICLES: [Vehicle 1] Tata Safari ...".
+HOW TO WRITE (most important):
+1. Talk TO them, using "you". NEVER write about "the user" in third person, and never mention
+   "retrieved vehicles", "the data", "the retrieval mode", or anything about how you searched.
+   Write "Based on what you're after, the Tata Safari..." -- NOT "The user is looking for...".
+2. Do NOT list every specification. Pick only the 2-3 facts per car that actually matter for
+   what they asked, and say why they matter. A wall of numbers is a failure, not thoroughness.
+3. Never repeat the same point twice.
+4. Keep it to roughly 3-6 sentences total. Recommend a clear favourite and say why.
 
-For your response:
-- State the retrieval mode (Exact / Relaxed / Fallback / Superlative) explicitly near the start.
-- For each recommended vehicle, briefly explain WHY it matches the request, citing specific
-  retrieved facts (price, seats, fuel, features, etc.) in your own words.
-- Compare vehicles against each other where relevant (price, features, fit for the request) --
-  if a COMPARISON TABLE is included below, reference its real values rather than re-deriving them.
-- Mention limitations or missing data honestly rather than guessing.
+GROUNDING: the vehicle data below is your ONLY source of truth. Never invent a specification,
+price, or feature that isn't there. If something is missing, say so plainly or leave it out --
+never guess. If a COMPARISON TABLE is provided, use its exact values.
 
-CRITICAL, depending on the retrieval mode given to you:
-- EXACT: every listed vehicle satisfies every requested constraint.
-- RELAXED: some constraints were dropped or widened to find these results (the specifics are
-  listed below) -- you MUST tell the user which of their original requirements these results
-  do NOT fully satisfy. Never claim a relaxed result meets a constraint that was relaxed away.
-- FALLBACK: no constraints could be verified at all -- these are general semantic matches only.
-  You MUST tell the user this plainly and not claim any specific requirement (price, seats,
-  brand, fuel, etc.) is guaranteed to be met by these results.
-- SUPERLATIVE: results are ranked by a direct, exact sort on one real metadata field (named in
-  the context below), NOT by search relevance -- say so explicitly, e.g. "ranked by top speed,
-  highest first," rather than implying these were chosen for general relevance to the request.
+GROUPING: when one sentence covers two or more cars ("the X and Y both..."), check the figure for
+EACH of them first. Only state what is true of every car you named. If they differ, split them up
+or leave the point out -- e.g. do not write "the A and B both seat fewer" when only A does.
 
-IMPORTANT: output your answer directly and immediately. Do not reason, plan, or think out loud
-first -- you already have everything you need in the data below."""
+HONESTY -- this depends on the mode given below, and you must get it right:
+- EXACT: everything listed genuinely meets what they asked. Just recommend naturally; there is
+  no need to announce the mode.
+- RELAXED: some of their requirements were loosened to find anything at all. You MUST say plainly
+  which of their requirements these cars do NOT meet. Never imply a relaxed-away requirement was met.
+- FALLBACK: nothing could be verified against their requirements -- these are loose matches only.
+  Say so plainly and promise nothing about price, seats, brand, or fuel.
+- SUPERLATIVE: these are ranked by sorting one real spec (named below), not by general fit. Say
+  which spec they're ranked by.
+
+GOOD EXAMPLE: "For an affordable 7-seater, the Mahindra XUV500 is your best bet at Rs 13.8 Lakh --
+it seats 7, returns about 16 kmpl, and costs a fraction of the alternatives. The Volvo XC90
+(Rs 80.99 Lakh) and BMW X7 (Rs 93 Lakh) also seat 7 and are far more refined, but they're in a
+completely different price bracket."
+
+BAD EXAMPLE (never do this): "The user is looking for a 7-seater. The retrieved vehicles are
+priced from Rs 13.8 Lakh to Rs 93 Lakh. The top speeds are 227 km/h, 180 km/h and 144.57 km/h.
+The boot space is 326 L, 530 L and N/A..."
+
+Output the reply immediately. Do not think out loud first."""
 
 _ECHO_MARKERS = ("RETRIEVED VEHICLES", "RETRIEVAL MODE:", "[Vehicle 1]", "[Vehicle 2]")
+
+# Third-person narration about the request, or about the retrieval machinery.
+# Both mean the model is describing the task instead of answering it.
+_META_NARRATION_MARKERS = (
+    "the user is looking for",
+    "the user wants",
+    "the user asked",
+    "the user's request",
+    "the retrieved vehicles",
+    "the retrieval mode",
+    "let me think",
+    "i need to",
+    "i should",
+)
+
+# A genuinely detailed 3-vehicle recommendation lands around 600-1500 chars.
+# This ceiling only catches real runaway, not normal thoroughness.
+_MAX_ANSWER_CHARS = 4000
 
 
 NO_RESULTS_MESSAGE = (
@@ -138,16 +165,46 @@ def generate_answer_stream(query: str, outcome: RetrievalOutcome, chunk_store: C
 
 
 def needs_regeneration(answer: str, outcome: RetrievalOutcome) -> bool:
-    """Whether an answer failed any of the three quality checks and should
-    be replaced via the slower, more reliable long-form path."""
-    return looks_like_rambling(answer) or _looks_like_context_echo(answer) or _looks_incomplete(answer, outcome)
+    """Whether an answer failed a quality check and should be replaced via
+    the slower, more reliable long-form path.
+
+    Deliberately does NOT use ollama_client.looks_like_rambling(): that
+    helper's 500-character ceiling is calibrated for one-line outputs
+    (query rewrites, HyDE snippets). A legitimate recommendation covering
+    three vehicles runs well past 500 chars, so reusing it here fired on
+    essentially every substantive answer -- forcing the slow regeneration
+    path every time, which then frequently timed out and left the user
+    with an error instead of the answer they'd already been shown.
+    """
+    return (
+        _looks_like_meta_narration(answer)
+        or _looks_like_context_echo(answer)
+        or _looks_incomplete(answer, outcome)
+        or len(answer) > _MAX_ANSWER_CHARS
+    )
 
 
-def regenerate_long_form(query: str, outcome: RetrievalOutcome, chunk_store: ChunkStore) -> str:
+def _looks_like_meta_narration(answer: str) -> bool:
+    """Catches answers written ABOUT the request rather than TO the person
+    -- "The user is looking for...", "The retrieved vehicles are..." --
+    which read as internal analysis leaking into the response."""
+    lowered = answer.lower()
+    return any(marker in lowered for marker in _META_NARRATION_MARKERS)
+
+
+def regenerate_long_form(query: str, outcome: RetrievalOutcome, chunk_store: ChunkStore) -> Optional[str]:
+    """Returns a replacement answer, or None if regeneration failed.
+
+    None (rather than an error message) is deliberate: the caller has
+    already shown the user a real, readable answer. Swapping that for
+    "Sorry, I couldn't generate..." because the *second, optional* attempt
+    timed out would be strictly worse than leaving the flawed original in
+    place.
+    """
     try:
         return chat_long_form(messages=_build_messages(query, outcome, chunk_store))
-    except OllamaError as e:
-        return _fallback_message(outcome, e)
+    except OllamaError:
+        return None
 
 
 def _looks_like_context_echo(answer: str) -> bool:
