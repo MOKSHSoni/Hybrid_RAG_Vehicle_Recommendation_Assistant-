@@ -16,17 +16,25 @@ preamble before the required JSON) -- but for open-ended/creative prompts
 (e.g. HyDE's "write a description"), the model was observed to instead
 cram its entire reasoning monologue INSIDE the schema's string field
 itself (e.g. {"result": "Okay, the user wants a hypothetical..."}) --
-structurally valid JSON, semantically useless content, ~470 tokens and
-15s+ instead of the ~2s/50-token answer actually wanted. The fix that
-worked reliably: an explicit "output the answer directly, do not reason
-out loud" instruction in the prompt. chat_text() below defends in depth
--- callers should still phrase prompts this way, and chat_text() detects
-rambling-shaped output and retries once with a firmer instruction before
-giving up and returning whatever it got (never crashes, never blocks
-forever).
+structurally valid JSON, semantically useless content. The fix that
+worked reliably for short outputs: an explicit "output the answer
+directly, do not reason out loud" instruction in the prompt, plus
+chat_text()'s automatic rambling-detection-and-retry.
+
+For LONGER, more involved generation (Phase 11's multi-vehicle
+explanations), even that retry sometimes still rambles both times. The
+one approach confirmed to reliably separate thinking from the actual
+answer regardless of task complexity: OMIT the `think` parameter from the
+Ollama call entirely (not think=False -- actually omitted) and read only
+`message.content`, never `message.thinking`. Ollama then properly
+classifies reasoning into the `thinking` field and keeps `content` clean
+-- confirmed empirically -- but the model still spends real time
+thinking, so this is slower (tens of seconds) and only worth it as a
+fallback when the fast schema-based path fails. See chat_long_form().
 """
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Union
 
 import ollama
@@ -58,6 +66,7 @@ _NO_RAMBLING_INSTRUCTION = (
     "think out loud -- do not write phrases like 'let me think' or 'the user wants'. "
     "You already know the answer; state it directly."
 )
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 def chat(
@@ -66,20 +75,22 @@ def chat(
     format: Optional[Union[str, Dict[str, Any]]] = None,
     temperature: float = config.OLLAMA_TEMPERATURE,
     timeout: float = config.OLLAMA_TIMEOUT_SECONDS,
-    think: bool = False,
+    think: Optional[bool] = False,
 ) -> str:
     """For structured (JSON schema) output. For free-form text generation,
-    prefer chat_text() -- an unconstrained `format=None` call leaves
-    thinking mode effectively unsuppressed (see module docstring)."""
+    prefer chat_text() (fast) or chat_long_form() (slower, robust
+    fallback) -- an unconstrained format=None call with think=False leaves
+    thinking mode effectively unsuppressed (see module docstring).
+
+    think=None omits the parameter entirely rather than sending False --
+    see module docstring for why that distinction matters.
+    """
     try:
         client = ollama.Client(host=config.OLLAMA_HOST, timeout=timeout)
-        response = client.chat(
-            model=model,
-            messages=messages,
-            format=format,
-            think=think,
-            options={"temperature": temperature},
-        )
+        kwargs: Dict[str, Any] = dict(model=model, messages=messages, format=format, options={"temperature": temperature})
+        if think is not None:
+            kwargs["think"] = think
+        response = client.chat(**kwargs)
         return response["message"]["content"]
     except Exception as e:
         raise OllamaError(f"Ollama call failed ({type(e).__name__}): {e}") from e
@@ -94,14 +105,30 @@ def chat_text(
     """Free-form text generation (query rewriting, HyDE descriptions,
     etc.), routed through a trivial {"result": "..."} schema for the
     thinking-suppression speedup described in the module docstring.
-    Detects rambling-shaped output (see _looks_like_rambling) and retries
+    Detects rambling-shaped output (see looks_like_rambling) and retries
     once with a firmer instruction; falls back to the raw response if the
     model ever ignores the schema entirely."""
     result = _chat_text_once(messages, model, temperature, timeout)
-    if _looks_like_rambling(result):
+    if looks_like_rambling(result):
         firmer_messages = messages + [{"role": "user", "content": _NO_RAMBLING_INSTRUCTION}]
         result = _chat_text_once(firmer_messages, model, temperature, timeout)
     return result
+
+
+def chat_long_form(
+    messages: List[Dict[str, str]],
+    model: str = config.OLLAMA_MODEL,
+    temperature: float = config.OLLAMA_TEMPERATURE,
+    timeout: float = config.GENERATION_FALLBACK_TIMEOUT_SECONDS,
+) -> str:
+    """Robust (but slow) fallback for longer, more involved generation
+    where chat_text()'s schema trick still rambles: lets the model think
+    freely (think param omitted) and returns only message.content, which
+    Ollama keeps clean of the reasoning trace regardless of task
+    complexity. Strips any stray <think> tags defensively in case a given
+    model/template ever leaks them into content anyway."""
+    raw = chat(messages=messages, model=model, format=None, temperature=temperature, timeout=timeout, think=None)
+    return _THINK_TAG_RE.sub("", raw).strip()
 
 
 def _chat_text_once(messages, model, temperature, timeout) -> str:
@@ -112,7 +139,7 @@ def _chat_text_once(messages, model, temperature, timeout) -> str:
         return raw.strip()
 
 
-def _looks_like_rambling(text: str) -> bool:
+def looks_like_rambling(text: str) -> bool:
     if len(text) > _RAMBLING_MAX_LEN:
         return True
     lowered = text.lower()
