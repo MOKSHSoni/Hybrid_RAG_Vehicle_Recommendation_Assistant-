@@ -4,7 +4,13 @@ from conftest import requires_ollama
 
 from src.query.models import Constraints
 from src.query.ollama_client import OllamaError
-from src.rag.generation import _looks_incomplete, _looks_like_context_echo, generate_answer
+from src.rag.generation import (
+    _looks_incomplete,
+    _looks_like_context_echo,
+    generate_answer,
+    generate_answer_stream,
+    needs_regeneration,
+)
 from src.reranking.cross_encoder import CrossEncoderReranker
 from src.retrieval.bm25.retriever import BM25Retriever
 from src.retrieval.dense.retriever import DenseRetriever
@@ -79,6 +85,24 @@ def test_looks_incomplete_detects_short_preamble_only(knowledge_base):
     assert _looks_incomplete(truncated, outcome) is True
 
 
+def test_looks_incomplete_rejects_bare_vehicle_name(knowledge_base):
+    # Names a vehicle, but is obviously not a recommendation -- the length
+    # floor exists for exactly this degenerate case.
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+    assert _looks_incomplete("Porsche Macan", outcome) is True
+
+
+def test_looks_incomplete_accepts_terse_but_valid_answer(knowledge_base):
+    # Regression: an unconditional <100-char floor used to flag this valid
+    # answer and trigger a needless (very slow) regeneration.
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+    terse = "The Porsche Macan is a strong match here thanks to its balance of performance and practicality."
+    assert len(terse) < 100  # the case the old threshold got wrong
+    assert _looks_incomplete(terse, outcome) is False
+
+
 def test_looks_incomplete_accepts_answer_naming_a_vehicle(knowledge_base):
     merged = _merged_for_macan(knowledge_base.chunk_store)
     outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
@@ -115,6 +139,46 @@ def test_generate_answer_falls_back_to_long_form_on_context_echo(knowledge_base)
 
     assert answer == "A proper written answer about the Macan."
     mock_long_form.assert_called_once()
+
+
+def test_generate_answer_stream_yields_deltas(knowledge_base):
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+
+    with patch("src.rag.generation.chat_text_stream", return_value=iter(["The Porsche ", "Macan is a ", "solid pick."])):
+        out = list(generate_answer_stream("affordable SUV", outcome, knowledge_base.chunk_store))
+
+    assert "".join(out) == "The Porsche Macan is a solid pick."
+
+
+def test_generate_answer_stream_empty_results_yields_no_results_message(knowledge_base):
+    outcome = RetrievalOutcome(mode="fallback", results=[], original_constraints=None)
+    with patch("src.rag.generation.chat_text_stream") as mock_stream:
+        out = list(generate_answer_stream("anything", outcome, knowledge_base.chunk_store))
+    assert "couldn't find any vehicles" in "".join(out)
+    mock_stream.assert_not_called()
+
+
+def test_generate_answer_stream_degrades_gracefully_on_ollama_error(knowledge_base):
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+
+    with patch("src.rag.generation.chat_text_stream", side_effect=OllamaError("simulated")):
+        out = "".join(generate_answer_stream("affordable SUV", outcome, knowledge_base.chunk_store))
+
+    assert "couldn't generate a written summary" in out
+    assert "Porsche Macan" in out  # vehicle still surfaced despite the failure
+
+
+def test_needs_regeneration_flags_each_failure_mode(knowledge_base):
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+
+    assert needs_regeneration("Okay, let me think about this for the user...", outcome) is True  # rambling
+    assert needs_regeneration("RETRIEVED VEHICLES (1): [Vehicle 1] Porsche Macan", outcome) is True  # echo
+    assert needs_regeneration("Here's the recommendation:", outcome) is True  # incomplete
+    good = "The Porsche Macan is a strong match here thanks to its balance of performance and practicality."
+    assert needs_regeneration(good, outcome) is False
 
 
 @requires_ollama

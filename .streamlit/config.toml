@@ -1,0 +1,18 @@
+[server]
+# Streamlit's hot-reload watcher walks every module in sys.modules and calls
+# hasattr(module, "__path__") on it. transformers' __init__ implements a lazy
+# _getattr that turns ANY unrecognised attribute access into a real
+# importlib.import_module(...), so that inspection actually imports unrelated
+# vision models -- e.g. transformers.models.zoedepth.image_processing_zoedepth,
+# which does `from torchvision.transforms.v2 import ...` at module top level.
+# torchvision is deliberately not installed (this project is text-only: MiniLM
+# embeddings + a MiniLM cross-encoder), so that import raises
+# ModuleNotFoundError. Streamlit catches it, but it prints a full traceback and
+# re-attempts those imports on every rerun.
+#
+# "none" makes app_session.py skip constructing the watcher altogether. The
+# tradeoff is no hot-reload on source edits -- restart the app after changing
+# code. Interactive reruns (typing a query, toggling the sidebar) are
+# unaffected. The alternative, installing torchvision, would add hundreds of MB
+# purely to satisfy a depth-estimation model this project never uses.
+fileWatcherType = "none"

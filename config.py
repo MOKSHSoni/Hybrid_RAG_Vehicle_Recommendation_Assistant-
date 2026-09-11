@@ -64,6 +64,10 @@ OLLAMA_HOST = "http://127.0.0.1:11434"
 OLLAMA_MODEL = "qwen3:4b"  # Q4_K_M quantization (Ollama's default tag for this size)
 OLLAMA_TIMEOUT_SECONDS = 60
 OLLAMA_TEMPERATURE = 0.0  # deterministic extraction/rewriting
+# How long Ollama keeps the model resident after a call. The default (5m)
+# means an idle session pays a multi-second reload on its next query; this
+# dataset is small enough that keeping a 2.5GB model warm is a fine trade.
+OLLAMA_KEEP_ALIVE = "30m"
 # Longer timeout for chat_long_form()'s fallback path (Phase 11), which lets
 # the model think freely rather than forcing fast schema-constrained output.
 # Observed during development: immediately after a long run of back-to-back
@@ -123,7 +127,12 @@ DEDUP_EVIDENCE_BOOST = 0.05
 # meaningfully better checkpoint for this retrieval task.
 CROSS_ENCODER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 RERANK_CANDIDATE_TOP_N = 30  # candidates fed INTO the cross-encoder (never the full 150-vehicle set)
-RERANK_TOP_K = 5  # final results shown to the user, after reranking
+RERANK_TOP_K = 3  # final results shown to the user, after reranking.
+# Lowered 5 -> 3 as a latency measure: generation cost scales with how many
+# vehicles the model has to write about (measured: ~211s for 5 vehicles vs
+# ~32s for 2 on this CPU-only setup), and it is by far the dominant stage.
+# NOTE: evaluation metrics are reported @K using this value, so numbers from
+# runs before this change were @5 and are not directly comparable.
 
 # ---- Constraint relaxation & fallback (Phase 10) ----
 # Price is widened in steps sized from the ACTUAL dataset's price quantiles

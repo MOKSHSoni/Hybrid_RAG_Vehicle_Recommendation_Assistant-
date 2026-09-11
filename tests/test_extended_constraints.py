@@ -8,7 +8,16 @@ from unittest.mock import patch
 import pytest
 from conftest import requires_ollama
 
-from src.query.llm_extraction import _to_constraints, _validate_schema, extract_constraints_via_llm
+import json
+
+from src.query.llm_extraction import (
+    CORE_JSON_SCHEMA,
+    JSON_SCHEMA,
+    _to_constraints,
+    _validate_schema,
+    extract_constraints_via_llm,
+    needs_extended_extraction,
+)
 from src.query.metadata_filter import matches_constraints
 from src.query.models import Constraints
 from src.query.regex_extraction import (
@@ -277,3 +286,58 @@ def test_understand_query_affordable_with_explicit_budget_is_not_superlative(pip
     assert result.constraints.price_max_lakhs == pytest.approx(15.0, abs=1.0)
     assert result.constraints.superlative_field is None
     assert result.constraints.superlative_direction is None
+
+
+# ---------------------------------------------------------------------------
+# Conditional schema escalation (latency optimisation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("affordable SUV under 15 lakh", False),
+        ("electric car with automatic transmission", False),
+        ("7 seater diesel SUV under 20 lakh", False),
+        ("tell me about the Tata Nexon EV", False),
+        ("cheapest Lamborghini", True),
+        ("how fast does it go", True),  # phrasing regex can't parse -- must still reach the LLM
+        ("roomiest boot", True),
+        ("engine under 2 litres", True),
+        ("best mileage sedan", True),
+        ("smallest engine", True),
+    ],
+)
+def test_needs_extended_extraction_routing(query, expected):
+    assert needs_extended_extraction(query) is expected
+
+
+def test_core_schema_is_the_original_seven_fields():
+    assert len(CORE_JSON_SCHEMA["required"]) == 7
+    assert len(JSON_SCHEMA["required"]) == 19
+    # Derived from the full schema, so the two can't drift apart.
+    for field in CORE_JSON_SCHEMA["required"]:
+        assert CORE_JSON_SCHEMA["properties"][field] == JSON_SCHEMA["properties"][field]
+
+
+def test_extraction_sends_core_schema_for_plain_query():
+    payload = json.dumps({
+        "brand": None, "fuel_types": [], "transmission": None, "seating_capacity": None,
+        "body_type": "SUV", "price_max_lakhs": 15.0, "price_min_lakhs": None,
+    })
+    with patch("src.query.llm_extraction.chat", return_value=payload) as mock_chat:
+        constraints = extract_constraints_via_llm("affordable SUV under 15 lakh")
+    assert len(mock_chat.call_args.kwargs["format"]["required"]) == 7
+    assert constraints.body_type == "SUV"
+    assert constraints.numeric_ranges == {}  # absent keys must not crash _to_constraints
+    assert constraints.superlative_field is None
+
+
+def test_extraction_sends_full_schema_for_superlative_query():
+    payload = json.dumps({k: None for k in JSON_SCHEMA["required"]} | {
+        "fuel_types": [], "superlative_field": "price_lakhs", "superlative_direction": "asc",
+    })
+    with patch("src.query.llm_extraction.chat", return_value=payload) as mock_chat:
+        constraints = extract_constraints_via_llm("cheapest Lamborghini")
+    assert len(mock_chat.call_args.kwargs["format"]["required"]) == 19
+    assert constraints.superlative_field == "price_lakhs"

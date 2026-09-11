@@ -35,7 +35,7 @@ fallback when the fast schema-based path fails. See chat_long_form().
 
 import json
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 import ollama
 
@@ -87,7 +87,13 @@ def chat(
     """
     try:
         client = ollama.Client(host=config.OLLAMA_HOST, timeout=timeout)
-        kwargs: Dict[str, Any] = dict(model=model, messages=messages, format=format, options={"temperature": temperature})
+        kwargs: Dict[str, Any] = dict(
+            model=model,
+            messages=messages,
+            format=format,
+            options={"temperature": temperature},
+            keep_alive=config.OLLAMA_KEEP_ALIVE,
+        )
         if think is not None:
             kwargs["think"] = think
         response = client.chat(**kwargs)
@@ -148,6 +154,81 @@ def _chat_text_once(messages, model, temperature, timeout) -> str:
         return json.loads(raw)["result"].strip()
     except (json.JSONDecodeError, KeyError, TypeError):
         return raw.strip()
+
+
+def chat_text_stream(
+    messages: List[Dict[str, str]],
+    model: str = config.OLLAMA_MODEL,
+    temperature: float = config.OLLAMA_TEMPERATURE,
+    timeout: float = config.GENERATION_FALLBACK_TIMEOUT_SECONDS,
+) -> Iterator[str]:
+    """Streaming counterpart to chat_text(), for UI surfaces that want
+    first-token latency instead of waiting on a whole answer.
+
+    Non-obvious detail: this still uses the {"result": "..."} schema (same
+    thinking-suppression reason as chat_text -- an unconstrained stream
+    would stream the model's reasoning trace at the user). That means the
+    raw stream is JSON, not prose, so this incrementally decodes the
+    `result` string value and yields only the prose delta. Callers get
+    clean text; the schema trick stays invisible.
+    """
+    try:
+        client = ollama.Client(host=config.OLLAMA_HOST, timeout=timeout)
+        stream = client.chat(
+            model=model,
+            messages=messages,
+            format=_TEXT_SCHEMA,
+            options={"temperature": temperature},
+            keep_alive=config.OLLAMA_KEEP_ALIVE,
+            think=False,
+            stream=True,
+        )
+        buffer = ""
+        emitted = 0
+        for part in stream:
+            buffer += part["message"]["content"]
+            decoded = _partial_json_string(buffer, "result")
+            if decoded is not None and len(decoded) > emitted:
+                yield decoded[emitted:]
+                emitted = len(decoded)
+    except Exception as e:
+        raise OllamaError(f"Ollama stream failed ({type(e).__name__}): {e}") from e
+
+
+_JSON_UNESCAPE = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "/": "/"}
+
+
+def _partial_json_string(buffer: str, key: str) -> Optional[str]:
+    """Decode as much of the `"<key>": "..."` value as has streamed in.
+
+    Returns None until the opening quote arrives. Escape sequences are
+    decoded, and a trailing half-streamed escape (a lone backslash at the
+    buffer edge) stops cleanly rather than emitting a stray character --
+    the next chunk re-decodes it whole.
+    """
+    marker = f'"{key}"'
+    start = buffer.find(marker)
+    if start == -1:
+        return None
+    quote = buffer.find('"', start + len(marker) + 1)
+    if quote == -1:
+        return None
+
+    out = []
+    i = quote + 1
+    while i < len(buffer):
+        ch = buffer[i]
+        if ch == "\\":
+            if i + 1 >= len(buffer):
+                break  # escape sequence still streaming -- stop cleanly
+            out.append(_JSON_UNESCAPE.get(buffer[i + 1], buffer[i + 1]))
+            i += 2
+            continue
+        if ch == '"':
+            break  # closing quote -- string complete
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def looks_like_rambling(text: str) -> bool:
