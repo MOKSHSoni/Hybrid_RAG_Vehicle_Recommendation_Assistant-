@@ -96,6 +96,17 @@ def chat(
         raise OllamaError(f"Ollama call failed ({type(e).__name__}): {e}") from e
 
 
+def is_reachable(timeout: float = 5.0) -> bool:
+    """Cheap reachability check for UI status banners (Phase 13) -- lists
+    locally available models rather than invoking generation at all, so
+    it stays fast regardless of how loaded the model currently is."""
+    try:
+        ollama.Client(host=config.OLLAMA_HOST, timeout=timeout).list()
+        return True
+    except Exception:
+        return False
+
+
 def chat_text(
     messages: List[Dict[str, str]],
     model: str = config.OLLAMA_MODEL,
