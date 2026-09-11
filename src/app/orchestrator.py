@@ -97,6 +97,9 @@ def answer_query(
         "body_type": constraints.body_type,
         "price_max_lakhs": constraints.price_max_lakhs,
         "price_min_lakhs": constraints.price_min_lakhs,
+        "numeric_ranges": constraints.numeric_ranges,
+        "superlative_field": constraints.superlative_field,
+        "superlative_direction": constraints.superlative_direction,
     }
 
     t0 = time.time()

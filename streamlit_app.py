@@ -13,6 +13,7 @@ import streamlit as st
 from src.app.orchestrator import Pipeline, answer_query
 from src.query.models import ConversationTurn
 from src.query.ollama_client import is_reachable
+from src.rag.comparison import build_comparison_rows
 
 st.set_page_config(page_title="Car Sales Assistant", page_icon="🚗", layout="wide")
 
@@ -20,6 +21,7 @@ MODE_LABELS = {
     "exact": ("Exact match", "green"),
     "relaxed": ("Relaxed match -- some requirements were loosened", "orange"),
     "fallback": ("Semantic fallback -- no requirements verified", "red"),
+    "superlative": ("Ranked by exact metadata sort, not relevance", "blue"),
 }
 
 
@@ -92,11 +94,22 @@ def render_debug_panel(result) -> None:
                 st.info(result.hyde_description)
 
 
+def render_comparison_table(result) -> None:
+    if len(result.outcome.results) < 2:
+        return
+    rows = build_comparison_rows(result.outcome)
+    if not rows:
+        return
+    with st.expander("Compare"):
+        st.dataframe(rows, hide_index=True, use_container_width=True)
+
+
 def render_result(result) -> None:
     render_mode_badge(result.log.mode)
     if result.outcome.results:
         for merged in result.outcome.results:
             render_vehicle_card(merged)
+        render_comparison_table(result)
     if st.session_state.get("show_debug"):
         render_debug_panel(result)
 

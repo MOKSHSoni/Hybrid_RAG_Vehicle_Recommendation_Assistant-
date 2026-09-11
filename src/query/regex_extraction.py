@@ -6,7 +6,7 @@ constraints (especially price/seating) that regex handles reliably.
 """
 
 import re
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from src.query.models import Constraints
 from src.retrieval.chunk_store import ChunkStore
@@ -41,6 +41,27 @@ _BODY_TYPE_SYNONYMS = {
     "roadster": "Convertible",
 }
 
+# Canonical metadata field name -> trigger phrases. Units are optional in
+# the regex below ("top speed above 200" needs no unit word).
+_NUMERIC_METRIC_PHRASES: Dict[str, List[str]] = {
+    "top_speed_kmph": ["top speed", "topspeed", "max speed", "maximum speed"],
+    "boot_space_l": ["boot space", "boot capacity", "cargo space", "luggage space", "trunk space"],
+    "ground_clearance_mm": ["ground clearance"],
+    "mileage_max_kmpl": ["mileage", "fuel efficiency", "fuel economy"],
+    "engine_max_cc": ["engine size", "engine displacement", "displacement", "engine capacity"],
+}
+
+# (pattern, metadata field, sort direction) -- checked in order, first match wins.
+_SUPERLATIVE_PATTERNS: List[Tuple[str, str, str]] = [
+    (r"\bcheapest\b|\blowest price\b|\bleast expensive\b", "price_lakhs", "asc"),
+    (r"\bmost expensive\b|\bhighest price\b", "price_lakhs", "desc"),
+    (r"\bfastest\b|\bhighest top speed\b|\bmax(?:imum)? top speed\b", "top_speed_kmph", "desc"),
+    (r"\bbiggest boot\b|\blargest boot\b|\bmost boot space\b|\bmost cargo space\b", "boot_space_l", "desc"),
+    (r"\bbest mileage\b|\bmost fuel efficient\b|\bhighest mileage\b", "mileage_max_kmpl", "desc"),
+    (r"\bhighest ground clearance\b", "ground_clearance_mm", "desc"),
+    (r"\bmost powerful\b|\bbiggest engine\b|\blargest engine\b", "engine_max_cc", "desc"),
+]
+
 
 def known_brands_from_chunk_store(chunk_store: ChunkStore) -> List[str]:
     brands = {c.metadata.get("brand") for c in chunk_store.all_chunks()}
@@ -49,6 +70,7 @@ def known_brands_from_chunk_store(chunk_store: ChunkStore) -> List[str]:
 
 def extract_regex_constraints(query: str, known_brands: List[str]) -> Constraints:
     price_min, price_max = extract_price_constraints(query)
+    superlative_field, superlative_direction = extract_superlative(query)
     return Constraints(
         brand=extract_brand_constraint(query, known_brands),
         fuel_types=extract_fuel_constraints(query),
@@ -57,6 +79,9 @@ def extract_regex_constraints(query: str, known_brands: List[str]) -> Constraint
         body_type=extract_body_type_constraint(query),
         price_max_lakhs=price_max,
         price_min_lakhs=price_min,
+        numeric_ranges=extract_numeric_range_constraints(query),
+        superlative_field=superlative_field,
+        superlative_direction=superlative_direction,
     )
 
 
@@ -89,6 +114,53 @@ def extract_price_constraints(text: str) -> Tuple[Optional[float], Optional[floa
     if m:
         return None, _to_lakhs(float(m.group(1)), m.group(2))
 
+    return None, None
+
+
+def extract_numeric_range_constraints(text: str) -> Dict[str, Tuple[Optional[float], Optional[float]]]:
+    """Range constraints on the extended numeric metrics (top speed, boot
+    space, ground clearance, mileage, engine size), keyed by canonical
+    metadata field name. Independent of extract_price_constraints -- price
+    keeps its own Lakh/Crore-aware implementation unchanged."""
+    text_lower = text.lower()
+    result: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
+    for field_name, phrases in _NUMERIC_METRIC_PHRASES.items():
+        min_v, max_v = _extract_metric_range(text_lower, phrases)
+        if min_v is not None or max_v is not None:
+            result[field_name] = (min_v, max_v)
+    return result
+
+
+def _extract_metric_range(text_lower: str, phrases: List[str]) -> Tuple[Optional[float], Optional[float]]:
+    """Generic over/under/between number extraction scoped near one of the
+    given trigger phrases. Units are optional -- "top speed above 200"
+    needs no unit word, unlike price."""
+    phrase_pattern = "|".join(re.escape(p) for p in phrases)
+
+    range_pattern = rf"(?:{phrase_pattern}).{{0,20}}?{_NUMBER}\s*(?:-|to|and)\s*{_NUMBER}"
+    m = re.search(range_pattern, text_lower)
+    if m:
+        low, high = float(m.group(1)), float(m.group(2))
+        return min(low, high), max(low, high)
+
+    at_least_pattern = rf"(?:{phrase_pattern}).{{0,20}}?(?:above|over|more than|at least|min(?:imum)?)\s+{_NUMBER}"
+    m = re.search(at_least_pattern, text_lower)
+    if m:
+        return float(m.group(1)), None
+
+    at_most_pattern = rf"(?:{phrase_pattern}).{{0,20}}?(?:under|below|less than|up ?to|max(?:imum)?)\s+{_NUMBER}"
+    m = re.search(at_most_pattern, text_lower)
+    if m:
+        return None, float(m.group(1))
+
+    return None, None
+
+
+def extract_superlative(text: str) -> Tuple[Optional[str], Optional[str]]:
+    text_lower = text.lower()
+    for pattern, field_name, direction in _SUPERLATIVE_PATTERNS:
+        if re.search(pattern, text_lower):
+            return field_name, direction
     return None, None
 
 

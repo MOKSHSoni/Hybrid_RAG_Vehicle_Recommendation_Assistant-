@@ -10,11 +10,22 @@ endpoint again).
 """
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 import config
 from src.query.models import Constraints
 from src.query.ollama_client import chat
+
+# Canonical metadata field name -> (schema key prefix). Kept in one place so
+# the schema, validation, and _to_constraints stay in sync.
+_NUMERIC_RANGE_FIELDS = {
+    "top_speed_kmph": "top_speed_kmph",
+    "boot_space_l": "boot_space_l",
+    "ground_clearance_mm": "ground_clearance_mm",
+    "mileage_max_kmpl": "mileage_kmpl",
+    "engine_max_cc": "engine_cc",
+}
+_SUPERLATIVE_FIELDS = set(_NUMERIC_RANGE_FIELDS.keys()) | {"price_lakhs"}
 
 JSON_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -26,6 +37,18 @@ JSON_SCHEMA: Dict[str, Any] = {
         "body_type": {"type": ["string", "null"]},
         "price_max_lakhs": {"type": ["number", "null"]},
         "price_min_lakhs": {"type": ["number", "null"]},
+        "top_speed_kmph_min": {"type": ["number", "null"]},
+        "top_speed_kmph_max": {"type": ["number", "null"]},
+        "boot_space_l_min": {"type": ["number", "null"]},
+        "boot_space_l_max": {"type": ["number", "null"]},
+        "ground_clearance_mm_min": {"type": ["number", "null"]},
+        "ground_clearance_mm_max": {"type": ["number", "null"]},
+        "mileage_kmpl_min": {"type": ["number", "null"]},
+        "mileage_kmpl_max": {"type": ["number", "null"]},
+        "engine_cc_min": {"type": ["number", "null"]},
+        "engine_cc_max": {"type": ["number", "null"]},
+        "superlative_field": {"type": ["string", "null"]},
+        "superlative_direction": {"type": ["string", "null"]},
     },
     "required": [
         "brand",
@@ -35,8 +58,22 @@ JSON_SCHEMA: Dict[str, Any] = {
         "body_type",
         "price_max_lakhs",
         "price_min_lakhs",
+        "top_speed_kmph_min",
+        "top_speed_kmph_max",
+        "boot_space_l_min",
+        "boot_space_l_max",
+        "ground_clearance_mm_min",
+        "ground_clearance_mm_max",
+        "mileage_kmpl_min",
+        "mileage_kmpl_max",
+        "engine_cc_min",
+        "engine_cc_max",
+        "superlative_field",
+        "superlative_direction",
     ],
 }
+
+_NUMERIC_RANGE_KEYS = [k for k in JSON_SCHEMA["required"] if k.endswith(("_min", "_max"))]
 
 _SYSTEM_PROMPT = f"""You extract structured vehicle search constraints from a user's query.
 Respond with ONLY a JSON object matching this schema -- no explanation, no markdown fences:
@@ -47,13 +84,33 @@ Respond with ONLY a JSON object matching this schema -- no explanation, no markd
   "seating_capacity": integer or null,
   "body_type": string or null,
   "price_max_lakhs": number or null,
-  "price_min_lakhs": number or null
+  "price_min_lakhs": number or null,
+  "top_speed_kmph_min": number or null, "top_speed_kmph_max": number or null,
+  "boot_space_l_min": number or null, "boot_space_l_max": number or null,
+  "ground_clearance_mm_min": number or null, "ground_clearance_mm_max": number or null,
+  "mileage_kmpl_min": number or null, "mileage_kmpl_max": number or null,
+  "engine_cc_min": number or null, "engine_cc_max": number or null,
+  "superlative_field": string or null,
+  "superlative_direction": "asc" or "desc" or null
 }}
 Only set a field when the query actually states or clearly implies it; otherwise use null ([] for fuel_types).
 Valid body_type values: {", ".join(config.VALID_BODY_TYPES)}
 Valid fuel_types values: {", ".join(config.VALID_FUEL_TYPES)}
 Valid transmission values: {", ".join(config.VALID_TRANSMISSIONS)}
-price_max_lakhs / price_min_lakhs are in Lakhs INR (1 Crore = 100 Lakhs)."""
+price_max_lakhs / price_min_lakhs are in Lakhs INR (1 Crore = 100 Lakhs).
+top_speed_kmph is in km/h, boot_space_l in liters, ground_clearance_mm in millimeters, mileage_kmpl
+in km/l, engine_cc in cc. Use *_min for "at least X"/"above X" and *_max for "under X"/"below X".
+superlative_field is set ONLY for requests unambiguously asking for the single most extreme match --
+explicit superlative words like "cheapest", "fastest", "best mileage", "biggest boot space", "highest
+ground clearance", "most powerful" -- one of: {", ".join(sorted(_SUPERLATIVE_FIELDS))}.
+superlative_direction is "asc" for cheapest/lowest-style requests, "desc" for fastest/highest/most/
+biggest-style requests. Leave both null if the query is not asking for an extreme -- in particular,
+general price sentiment words like "affordable", "budget-friendly", or "cheap" WITHOUT an explicit
+superlative ("cheapest", "the most affordable") describe a price RANGE, not a request for the single
+cheapest option: set price_max_lakhs instead (if a number is given or implied) and leave
+superlative_field null. Example: "affordable SUV under 15 lakh" -> price_max_lakhs=15,
+superlative_field=null (NOT price_lakhs/asc) -- the user wants options within budget, not just the
+one cheapest vehicle."""
 
 
 def extract_constraints_via_llm(standalone_query: str) -> Constraints:
@@ -98,10 +155,14 @@ def _validate_schema(data: Any) -> bool:
         return False
     if data["body_type"] is not None and not isinstance(data["body_type"], str):
         return False
-    for key in ("price_max_lakhs", "price_min_lakhs"):
+    for key in ("price_max_lakhs", "price_min_lakhs", *_NUMERIC_RANGE_KEYS):
         value = data[key]
         if value is not None and not isinstance(value, (int, float)):
             return False
+    if data["superlative_field"] is not None and not isinstance(data["superlative_field"], str):
+        return False
+    if data["superlative_direction"] is not None and not isinstance(data["superlative_direction"], str):
+        return False
     return True
 
 
@@ -116,6 +177,17 @@ def _to_constraints(data: Dict[str, Any]) -> Constraints:
 
     fuel_types = [f for f in data["fuel_types"] if f in config.VALID_FUEL_TYPES]
 
+    numeric_ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
+    for canonical_field, schema_prefix in _NUMERIC_RANGE_FIELDS.items():
+        min_v, max_v = data.get(f"{schema_prefix}_min"), data.get(f"{schema_prefix}_max")
+        if min_v is not None or max_v is not None:
+            numeric_ranges[canonical_field] = (min_v, max_v)
+
+    superlative_field = data["superlative_field"]
+    superlative_direction = data["superlative_direction"]
+    if superlative_field not in _SUPERLATIVE_FIELDS or superlative_direction not in ("asc", "desc"):
+        superlative_field, superlative_direction = None, None  # hallucinated/malformed -- don't guess
+
     return Constraints(
         brand=data["brand"],
         fuel_types=fuel_types,
@@ -124,4 +196,7 @@ def _to_constraints(data: Dict[str, Any]) -> Constraints:
         body_type=body_type,
         price_max_lakhs=data["price_max_lakhs"],
         price_min_lakhs=data["price_min_lakhs"],
+        numeric_ranges=numeric_ranges,
+        superlative_field=superlative_field,
+        superlative_direction=superlative_direction,
     )

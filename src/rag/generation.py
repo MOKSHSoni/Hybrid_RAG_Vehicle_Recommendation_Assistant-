@@ -46,10 +46,11 @@ affordable SUV under 15 Lakh, the Tata Safari (Rs 14.9 Lakh, 7 seats) is a stron
 ..." -- not "RETRIEVED VEHICLES: [Vehicle 1] Tata Safari ...".
 
 For your response:
-- State the retrieval mode (Exact / Relaxed / Fallback) explicitly near the start.
+- State the retrieval mode (Exact / Relaxed / Fallback / Superlative) explicitly near the start.
 - For each recommended vehicle, briefly explain WHY it matches the request, citing specific
   retrieved facts (price, seats, fuel, features, etc.) in your own words.
-- Compare vehicles against each other where relevant (price, features, fit for the request).
+- Compare vehicles against each other where relevant (price, features, fit for the request) --
+  if a COMPARISON TABLE is included below, reference its real values rather than re-deriving them.
 - Mention limitations or missing data honestly rather than guessing.
 
 CRITICAL, depending on the retrieval mode given to you:
@@ -60,6 +61,9 @@ CRITICAL, depending on the retrieval mode given to you:
 - FALLBACK: no constraints could be verified at all -- these are general semantic matches only.
   You MUST tell the user this plainly and not claim any specific requirement (price, seats,
   brand, fuel, etc.) is guaranteed to be met by these results.
+- SUPERLATIVE: results are ranked by a direct, exact sort on one real metadata field (named in
+  the context below), NOT by search relevance -- say so explicitly, e.g. "ranked by top speed,
+  highest first," rather than implying these were chosen for general relevance to the request.
 
 IMPORTANT: output your answer directly and immediately. Do not reason, plan, or think out loud
 first -- you already have everything you need in the data below."""

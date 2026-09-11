@@ -1,7 +1,7 @@
 """Data models shared across query understanding (Phase 3+)."""
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import config
 
@@ -29,6 +29,23 @@ class Constraints:
     price_max_lakhs: Optional[float] = None
     price_min_lakhs: Optional[float] = None
 
+    # Extended numeric range constraints, keyed by canonical metadata field
+    # name (e.g. "top_speed_kmph", "boot_space_l") so metadata_filter needs
+    # no translation table. mileage/engine use the vehicle's best-case
+    # (max) variant as the single representative value -- same pattern as
+    # price_lakhs (not price_min/max_lakhs) being the value compared
+    # against above. Value is (min_threshold, max_threshold), either
+    # optionally None.
+    numeric_ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = field(default_factory=dict)
+
+    # Superlative request ("cheapest", "fastest", "highest ground
+    # clearance"): field is a metadata field name, direction is "asc" or
+    # "desc". Drives a distinct direct-metadata-sort code path (Phase 10's
+    # retrieve_with_relaxation), not a filter check -- deliberately NOT
+    # included in populated_fields()/CONSTRAINT_RELAXATION_ORDER.
+    superlative_field: Optional[str] = None
+    superlative_direction: Optional[str] = None  # "asc" | "desc" | None
+
     def populated_fields(self) -> List[str]:
         fields = []
         for name in ("brand", "transmission", "seating_capacity", "body_type", "price_max_lakhs", "price_min_lakhs"):
@@ -36,6 +53,7 @@ class Constraints:
                 fields.append(name)
         if self.fuel_types:
             fields.append("fuel_types")
+        fields.extend(self.numeric_ranges.keys())
         return fields
 
     def hard_fields(self) -> List[str]:

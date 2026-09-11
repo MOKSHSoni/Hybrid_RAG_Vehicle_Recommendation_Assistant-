@@ -86,6 +86,15 @@ CONVERSATION_HISTORY_TURNS = 6  # how many recent turns feed context resolution
 # doubles as Phase 10's relaxation order, earliest-relaxed first.
 HARD_CONSTRAINT_FIELDS = {"seating_capacity"}
 CONSTRAINT_RELAXATION_ORDER = [
+    # Extended numeric preferences (top speed, boot space, ground clearance,
+    # mileage, engine size) relax first -- secondary "nice to have" specs,
+    # dropped outright (no quantile-widening; see modes.py) rather than
+    # protected the way the primary budget constraint (price) is.
+    "top_speed_kmph",
+    "boot_space_l",
+    "ground_clearance_mm",
+    "mileage_max_kmpl",
+    "engine_max_cc",
     "price_max_lakhs",
     "price_min_lakhs",
     "body_type",

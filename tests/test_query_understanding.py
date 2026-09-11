@@ -154,6 +154,22 @@ _VALID_PAYLOAD = {
     "body_type": "SUV",
     "price_max_lakhs": 20.0,
     "price_min_lakhs": None,
+    # Extended fields added alongside numeric range constraints & superlative
+    # ranking -- see test_extended_constraints.py for dedicated coverage of
+    # these; this fixture just needs to be schema-complete so the pre-existing
+    # tests below (body_type/transmission/fuel_types validation) still work.
+    "top_speed_kmph_min": None,
+    "top_speed_kmph_max": None,
+    "boot_space_l_min": None,
+    "boot_space_l_max": None,
+    "ground_clearance_mm_min": None,
+    "ground_clearance_mm_max": None,
+    "mileage_kmpl_min": None,
+    "mileage_kmpl_max": None,
+    "engine_cc_min": None,
+    "engine_cc_max": None,
+    "superlative_field": None,
+    "superlative_direction": None,
 }
 
 
