@@ -341,3 +341,44 @@ def test_extraction_sends_full_schema_for_superlative_query():
         constraints = extract_constraints_via_llm("cheapest Lamborghini")
     assert len(mock_chat.call_args.kwargs["format"]["required"]) == 19
     assert constraints.superlative_field == "price_lakhs"
+
+
+# ---------------------------------------------------------------------------
+# Anti-invention guards (reported bug: "suggest cars of bmw" came back with
+# 17 populated fields, over-constraining the search into needless relaxation)
+# ---------------------------------------------------------------------------
+
+
+def test_common_words_ending_in_est_do_not_escalate():
+    # A "\w+est" catch-all matched "suggest"/"request"/"latest" and sent
+    # ordinary queries to the slow 19-field schema for no reason.
+    for query in ("suggest cars of bmw", "request a quote", "the latest models", "honest advice"):
+        assert needs_extended_extraction(query) is False, query
+    for query in ("cheapest Lamborghini", "fastest car", "best mileage"):
+        assert needs_extended_extraction(query) is True, query
+
+
+def test_to_constraints_strips_all_fuel_types_as_no_constraint():
+    payload = dict(_VALID_PAYLOAD, fuel_types=list(__import__("config").VALID_FUEL_TYPES))
+    assert _to_constraints(payload).fuel_types == []
+
+
+def test_to_constraints_strips_zero_price_floor():
+    payload = dict(_VALID_PAYLOAD, price_min_lakhs=0)
+    assert _to_constraints(payload).price_min_lakhs is None
+
+
+def test_to_constraints_strips_zero_numeric_floor():
+    payload = dict(_VALID_PAYLOAD, top_speed_kmph_min=0, top_speed_kmph_max=300)
+    # The 0 floor is a no-op and must not survive; the real ceiling should.
+    assert _to_constraints(payload).numeric_ranges["top_speed_kmph"] == (None, 300)
+
+
+def test_to_constraints_drops_range_that_is_entirely_a_no_op():
+    payload = dict(_VALID_PAYLOAD, top_speed_kmph_min=0, top_speed_kmph_max=None)
+    assert "top_speed_kmph" not in _to_constraints(payload).numeric_ranges
+
+
+def test_to_constraints_keeps_a_real_fuel_preference():
+    payload = dict(_VALID_PAYLOAD, fuel_types=["Diesel"])
+    assert _to_constraints(payload).fuel_types == ["Diesel"]
