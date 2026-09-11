@@ -1,4 +1,4 @@
-from src.rag.comparison import build_comparison_rows
+from src.rag.comparison import build_comparison_rows, format_comparison_for_prompt
 from src.retrieval.merge import MergedResult
 from src.retrieval.modes import RetrievalOutcome
 
@@ -78,10 +78,39 @@ def test_build_comparison_rows_formats_fuel_types_as_string():
     assert rows[0]["fuel_types"] == "Petrol, Diesel"
 
 
-def test_context_table_renders_missing_values_as_na():
+def test_prompt_table_renders_missing_values_as_na():
     # The text table still shows "N/A" even though the rows carry None.
-    from src.rag.context_builder import _format_table
-
-    rendered = _format_table([{"name": "A", "boot_space_l": 447.0}, {"name": "B", "boot_space_l": None}])
+    rendered = format_comparison_for_prompt(
+        [{"name": "A", "boot_space_l": 447.0}, {"name": "B", "boot_space_l": None}]
+    )
     assert "N/A" in rendered
     assert "447.0" in rendered
+
+
+def test_prompt_table_marks_highest_and_lowest():
+    # The model kept mis-comparing numbers (calling a 515L boot "less
+    # practical" than 480L), so the extremes are precomputed for it.
+    rendered = format_comparison_for_prompt([
+        {"name": "A", "price_lakhs": 42.6, "boot_space_l": 480.0},
+        {"name": "B", "price_lakhs": 138.0, "boot_space_l": 515.0},
+        {"name": "C", "price_lakhs": 133.0, "boot_space_l": 440.0},
+    ])
+    assert "42.6 (cheapest)" in rendered
+    assert "138.0 (most expensive)" in rendered
+    assert "515.0 (largest boot)" in rendered
+    assert "440.0 (smallest boot)" in rendered
+
+
+def test_prompt_table_skips_annotation_when_all_equal():
+    rendered = format_comparison_for_prompt(
+        [{"name": "A", "price_lakhs": 50.0}, {"name": "B", "price_lakhs": 50.0}]
+    )
+    assert "cheapest" not in rendered and "most expensive" not in rendered
+
+
+def test_prompt_table_ignores_non_numeric_and_missing_for_extremes():
+    rendered = format_comparison_for_prompt(
+        [{"name": "A", "boot_space_l": 400.0}, {"name": "B", "boot_space_l": None}]
+    )
+    # Only one comparable value -> nothing to call largest/smallest.
+    assert "largest boot" not in rendered
