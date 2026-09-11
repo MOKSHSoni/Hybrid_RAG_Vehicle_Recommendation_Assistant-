@@ -198,9 +198,13 @@ def main() -> None:
             # The quality checks need the whole text, so they run post-stream;
             # a failed check replaces what was streamed via the slower path.
             if needs_regeneration(answer, result.outcome):
-                with st.spinner("That answer came out garbled -- rewriting it..."):
-                    answer = regenerate_long_form(user_input, result.outcome, pipeline.kb.chunk_store)
-                answer_slot.markdown(answer)
+                with st.spinner("Improving that answer..."):
+                    better = regenerate_long_form(user_input, result.outcome, pipeline.kb.chunk_store)
+                # None means the retry failed -- keep the answer already on
+                # screen rather than replacing real content with an error.
+                if better:
+                    answer = better
+                    answer_slot.markdown(answer)
 
             result.answer = answer
             result.log.add_timing("generation (streamed)", (time.time() - started) * 1000)
