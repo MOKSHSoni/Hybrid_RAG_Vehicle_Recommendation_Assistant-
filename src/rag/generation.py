@@ -66,6 +66,18 @@ or leave the point out -- e.g. do not write "the A and B both seat fewer" when o
 If a figure is N/A for one of them, that car is UNKNOWN on that point, not low -- leave it out of
 the comparison entirely rather than writing "A and B have smaller boots (N/A and 326L)".
 
+NEVER use "respectively" or any other positional list-matching. Attach each number to its car by
+name, right next to it: write "the 8 Series (440L) and the 7 Series (515L)", NOT "the 7 Series and
+8 Series (440L and 515L respectively)". Mismatching those is the single easiest way to state
+something false.
+
+COMPARISONS: if the comparison table tags a value as cheapest / largest boot / best mileage etc.,
+use that tag. Do not work out which number is bigger yourself -- the tags are already correct.
+
+DO NOT INVENT THE REQUEST. Describe only what they actually asked for. If they simply named a brand
+or asked something broad, do not open with a made-up specific requirement -- for "bmw cars", never
+write "For a premium sedan with 5 seats...". They said none of that.
+
 HONESTY -- this depends on the mode given below, and you must get it right:
 - EXACT: everything listed genuinely meets what they asked. Just recommend naturally; there is
   no need to announce the mode.

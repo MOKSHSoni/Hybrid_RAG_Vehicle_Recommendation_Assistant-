@@ -12,7 +12,7 @@ verified, and a superlative result must never be conflated with relevance
 ranking (it's a direct metadata sort, not a search).
 """
 
-from src.rag.comparison import build_comparison_rows
+from src.rag.comparison import build_comparison_rows, format_comparison_for_prompt
 from src.retrieval.chunk_store import ChunkStore
 from src.retrieval.modes import RetrievalOutcome
 
@@ -58,21 +58,10 @@ def build_context_block(outcome: RetrievalOutcome, chunk_store: ChunkStore) -> s
         rows = build_comparison_rows(outcome, chunk_store)
         if rows:
             lines.append("")
-            lines.append("COMPARISON TABLE (exact metadata values, not LLM-derived):")
-            lines.append(_format_table(rows))
+            lines.append(
+                "COMPARISON TABLE (exact values, with each column's extreme already marked -- "
+                "use those tags rather than comparing the numbers yourself):"
+            )
+            lines.append(format_comparison_for_prompt(rows))
 
     return "\n".join(lines)
-
-
-def _format_table(rows) -> str:
-    # build_comparison_rows() leaves missing values as None (so the UI's
-    # dataframe keeps numeric dtypes); rendering them as "N/A" is this
-    # text layer's job.
-    columns = list(rows[0].keys())
-    header = "| " + " | ".join(columns) + " |"
-    separator = "| " + " | ".join("---" for _ in columns) + " |"
-    body = [
-        "| " + " | ".join("N/A" if row.get(c) is None else str(row.get(c)) for c in columns) + " |"
-        for row in rows
-    ]
-    return "\n".join([header, separator, *body])
