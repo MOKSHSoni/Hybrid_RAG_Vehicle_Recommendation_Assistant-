@@ -1,20 +1,20 @@
 import json
 from unittest.mock import patch
 
-from src.query.ollama_client import OllamaError, _looks_like_rambling, chat_text
+from src.query.ollama_client import OllamaError, chat_long_form, chat_text, looks_like_rambling
 
 
 def test_looks_like_rambling_detects_marker_phrases():
-    assert _looks_like_rambling("Okay, the user wants a hypothetical vehicle...") is True
-    assert _looks_like_rambling("Let me think about what to include here") is True
+    assert looks_like_rambling("Okay, the user wants a hypothetical vehicle...") is True
+    assert looks_like_rambling("Let me think about what to include here") is True
 
 
 def test_looks_like_rambling_detects_excessive_length():
-    assert _looks_like_rambling("x" * 501) is True
+    assert looks_like_rambling("x" * 501) is True
 
 
 def test_looks_like_rambling_accepts_clean_short_text():
-    assert _looks_like_rambling("The Everest GX is a rugged 7-seat SUV priced from Rs 12 Lakh.") is False
+    assert looks_like_rambling("The Everest GX is a rugged 7-seat SUV priced from Rs 12 Lakh.") is False
 
 
 def test_chat_text_returns_clean_result_without_retry():
@@ -54,3 +54,27 @@ def test_chat_text_propagates_ollama_error():
     with patch("src.query.ollama_client.chat", side_effect=OllamaError("simulated")):
         with pytest.raises(OllamaError):
             chat_text(messages=[{"role": "user", "content": "rewrite this"}])
+
+
+def test_chat_long_form_strips_stray_think_tags():
+    raw = "<think>internal reasoning that should never appear</think>The actual clean answer."
+    with patch("src.query.ollama_client.chat", return_value=raw):
+        result = chat_long_form(messages=[{"role": "user", "content": "explain this"}])
+    assert result == "The actual clean answer."
+    assert "internal reasoning" not in result
+
+
+def test_chat_long_form_omits_think_param_from_underlying_call():
+    # think=None must mean the `think` kwarg is left out of the client.chat()
+    # call entirely, not sent as False -- see ollama_client.py's module
+    # docstring for why that distinction is what actually keeps content clean.
+    with patch("src.query.ollama_client.chat") as mock_chat:
+        mock_chat.return_value = "clean answer"
+        chat_long_form(messages=[{"role": "user", "content": "explain this"}])
+    assert mock_chat.call_args.kwargs["think"] is None
+
+
+def test_chat_long_form_passes_no_format_schema():
+    with patch("src.query.ollama_client.chat", return_value="clean answer") as mock_chat:
+        chat_long_form(messages=[{"role": "user", "content": "explain this"}])
+    assert mock_chat.call_args.kwargs["format"] is None

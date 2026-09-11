@@ -18,6 +18,7 @@ ENRICHED_VEHICLES_PATH = PROCESSED_DATA_DIR / "vehicles_enriched.json"
 CHUNK_STORE_PATH = INDEX_DIR / "chunk_store.json"
 FAISS_INDEX_PATH = INDEX_DIR / "faiss_index.bin"
 BM25_INDEX_PATH = INDEX_DIR / "bm25_index.pkl"
+EVAL_QUERIES_PATH = PROJECT_ROOT / "evaluation" / "queries_v1.json"
 
 # ---- Missing-value handling (generic ingestion) ----
 MISSING_VALUE_SENTINELS = {"", "-", "na", "n/a", "null", "none", "nan"}
@@ -63,6 +64,18 @@ OLLAMA_HOST = "http://127.0.0.1:11434"
 OLLAMA_MODEL = "qwen3:4b"  # Q4_K_M quantization (Ollama's default tag for this size)
 OLLAMA_TIMEOUT_SECONDS = 60
 OLLAMA_TEMPERATURE = 0.0  # deterministic extraction/rewriting
+# Longer timeout for chat_long_form()'s fallback path (Phase 11), which lets
+# the model think freely rather than forcing fast schema-constrained output.
+# Observed during development: immediately after a long run of back-to-back
+# real Ollama calls (e.g. the full test suite), this CPU-only laptop's
+# inference noticeably slows down (plausibly thermal throttling under
+# sustained load) and can exceed even 120s for a single 5-vehicle
+# explanation, though the same call reliably finishes in 15-90s in
+# isolation. The graceful-degradation path (generation.py's
+# _fallback_message) is the real safety net for this, not the timeout
+# value -- this is set generously but a slow environment can still exceed
+# it, by design fails safe rather than hanging forever.
+GENERATION_FALLBACK_TIMEOUT_SECONDS = 150
 
 # ---- Query understanding (Phase 3) ----
 EXTRACTION_RETRY_COUNT = 1  # retry the LLM extraction once on invalid JSON, then fall back to regex-only
