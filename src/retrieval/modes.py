@@ -18,6 +18,17 @@ Mode C -- Semantic fallback: triggered when constraint extraction found
 nothing to filter on in the first place, OR relaxation exhausts every
 constraint with zero results. Pure semantic retrieval, no filtering.
 
+Mode Superlative -- triggered when constraints.superlative_field is set
+("cheapest", "fastest", "highest ground clearance", ...). Embeddings/BM25
+have no notion of numeric magnitude, so this bypasses retrieval entirely
+for the ranking decision: every OTHER populated constraint is applied via
+the existing metadata filter, vehicles missing the superlative field are
+dropped (missing data never confirms an extreme), and what's left is
+sorted directly by that field's real value -- an exact operation, not a
+relevance guess. If nothing survives the other constraints, falls through
+to the normal Exact/Relaxed/Fallback flow below rather than a doomed
+retry loop on the sort itself.
+
 GLOBAL RULE: fallback (and relaxed) results must be explicitly labeled as
 such by the caller (see RetrievalOutcome.mode) and must never be presented
 as satisfying constraints that were never verified -- this module never
@@ -32,7 +43,7 @@ from typing import List, Optional
 import numpy as np
 
 import config
-from src.query.metadata_filter import candidate_chunk_ids, unique_vehicles
+from src.query.metadata_filter import candidate_chunk_ids, filter_vehicles, unique_vehicles
 from src.query.models import Constraints
 from src.reranking.cross_encoder import CrossEncoderReranker
 from src.retrieval.chunk_store import ChunkStore
@@ -42,6 +53,7 @@ from src.retrieval.merge import MergedResult, merge_and_deduplicate
 MODE_EXACT = "exact"
 MODE_RELAXED = "relaxed"
 MODE_FALLBACK = "fallback"
+MODE_SUPERLATIVE = "superlative"
 
 
 @dataclass
@@ -66,6 +78,14 @@ def retrieve_with_relaxation(
     reranker: CrossEncoderReranker,
     all_prices: Optional[List[float]] = None,
 ) -> RetrievalOutcome:
+    if constraints.superlative_field:
+        results = _search_superlative(constraints, chunk_store)
+        if results:
+            return RetrievalOutcome(mode=MODE_SUPERLATIVE, results=results, original_constraints=constraints)
+        # Nothing satisfies the OTHER constraints (or none have this field
+        # populated) -- fall through to the normal flow below rather than a
+        # doomed retry loop on the sort itself.
+
     if constraints.is_empty():
         results = _search(query, None, chunk_store, hybrid_retriever, reranker)
         return RetrievalOutcome(mode=MODE_FALLBACK, results=results, original_constraints=constraints)
@@ -114,6 +134,45 @@ def _search(
     return reranker.rerank(query, merged, top_k=config.RERANK_TOP_K)
 
 
+def _search_superlative(constraints: Constraints, chunk_store: ChunkStore) -> List[MergedResult]:
+    """Direct metadata sort for a superlative request -- no retrieval, no
+    reranking, an exact Python sort on the real field value."""
+    field_name = constraints.superlative_field
+    descending = constraints.superlative_direction == "desc"
+
+    vehicles = filter_vehicles(unique_vehicles(chunk_store), constraints)
+    eligible = [v for v in vehicles if v.get(field_name) is not None]
+    eligible.sort(key=lambda v: v[field_name], reverse=descending)
+    top = eligible[: config.RERANK_TOP_K]
+
+    results = []
+    for vehicle in top:
+        vehicle_id = vehicle["vehicle_id"]
+        value = float(vehicle[field_name])
+        # Keep the "higher aggregate_score = better" convention used
+        # elsewhere (merge.py) even for "asc" (lower-is-better) requests.
+        score = value if descending else -value
+        results.append(
+            MergedResult(
+                vehicle_id=vehicle_id,
+                best_chunk=_representative_chunk(chunk_store, vehicle_id),
+                aggregate_score=score,
+                supporting_chunks=chunk_store.get_by_doc_id(vehicle_id),
+                match_count=1,
+                methods={"metadata_sort"},
+            )
+        )
+    return results
+
+
+def _representative_chunk(chunk_store: ChunkStore, vehicle_id: str):
+    chunks = chunk_store.get_by_doc_id(vehicle_id)
+    for chunk in chunks:
+        if chunk.chunk_type == "product_overview":
+            return chunk
+    return chunks[0]
+
+
 def _relaxation_steps_for_field(constraints: Constraints, field_name: str, all_prices: List[float]):
     """Yields (relaxed_constraints, description) pairs for one field, from
     least to most relaxed. Categorical fields yield exactly one step (drop
@@ -136,6 +195,13 @@ def _relaxation_steps_for_field(constraints: Constraints, field_name: str, all_p
                 break
             yield replace(constraints, price_min_lakhs=new_min), f"price_min_lakhs lowered to Rs {new_min:.2f} Lakh"
         yield replace(constraints, price_min_lakhs=None), "price_min_lakhs removed (widening exhausted)"
+
+    elif field_name in constraints.numeric_ranges:
+        # Secondary numeric preferences drop outright (one step) rather than
+        # quantile-widening like price -- see config.py's relaxation-order note.
+        new_ranges = dict(constraints.numeric_ranges)
+        del new_ranges[field_name]
+        yield replace(constraints, numeric_ranges=new_ranges), f"{field_name} requirement removed"
 
     else:
         current_value = getattr(constraints, field_name, None)

@@ -18,6 +18,9 @@ Semantics, matching the metadata schema fixed in Phase 1:
   guessed).
 - price_max/min_lakhs: vehicle's price_lakhs must fall within range;
   missing price can never confirm a match, so it's excluded, not guessed.
+- numeric_ranges (top_speed_kmph, boot_space_l, ground_clearance_mm,
+  mileage_max_kmpl, engine_max_cc): same missing-data-excludes-a-match
+  philosophy as price/seating.
 """
 
 from typing import Any, Dict, List, Optional, Set
@@ -88,6 +91,16 @@ def matches_constraints(
                 price = vehicle_metadata.get("price_lakhs")
                 if price is None or price < constraints.price_min_lakhs:
                     return False
+
+        elif field in constraints.numeric_ranges:
+            min_v, max_v = constraints.numeric_ranges[field]
+            value = vehicle_metadata.get(field)
+            if value is None:
+                return False  # missing data can never confirm a match, same as price/seating
+            if min_v is not None and value < min_v:
+                return False
+            if max_v is not None and value > max_v:
+                return False
 
     return True
 

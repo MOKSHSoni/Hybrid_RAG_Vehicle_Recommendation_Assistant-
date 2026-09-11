@@ -35,7 +35,7 @@ def test_answer_query_returns_populated_result(knowledge_base):
 
     assert isinstance(result, TurnResult)
     assert len(result.answer) > 0
-    assert result.log.mode in ("exact", "relaxed", "fallback")
+    assert result.log.mode in ("exact", "relaxed", "fallback", "superlative")
     assert result.log.total_ms() > 0
     assert result.expansion_queries is None  # debug-only extras off by default
     assert result.hyde_description is None

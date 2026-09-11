@@ -6,7 +6,13 @@ retrieval, query understanding, query expansion, HyDE, cross-encoder
 reranking, and constraint-based filtering with graceful fallback — all
 grounded in retrieved data, with a Qwen3/Ollama-powered Streamlit chat UI.
 
-**Status: Phases 1-13 complete** (Phase 14, optional Langfuse tracing, not
+**Status: Phases 1-13 complete**, plus an extension beyond the original
+spec: extended numeric constraints (top speed, boot space, ground
+clearance, mileage, engine size), superlative queries ("cheapest,"
+"fastest" — answered via a direct, exact metadata sort rather than
+semantic retrieval, which has no notion of numeric magnitude), and an
+LLM-independent comparison table (`demo_extended_constraints.py`).
+(Phase 14, optional Langfuse tracing, not
 yet implemented — the spec explicitly treats it as an add-on only after
 everything else works end to end).
 
@@ -92,6 +98,8 @@ python demo_phase9.py   # cross-encoder reranking
 python demo_phase10.py  # constraint relaxation & fallback (Exact/Relaxed/Fallback modes)
 python demo_phase11.py  # final RAG generation
 python demo_phase12.py  # evaluation across retrieval configurations
+
+python demo_extended_constraints.py  # extension: numeric range constraints, superlatives, comparison table
 ```
 
 ### Testing
