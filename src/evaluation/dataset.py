@@ -1,8 +1,9 @@
 """Phase 12: evaluation query dataset loader.
 
-Loads a versioned evaluation/queries_vN.json file (see evaluation/queries_v1.json
--- a first draft written by the coding agent, to be reviewed/refined by a
-human before being treated as ground truth) into typed EvalQuery objects.
+Loads a versioned evaluation/queries_vN.json file (currently
+evaluation/queries_v2.json, per config.EVAL_QUERIES_PATH -- a draft
+written by the coding agent, to be reviewed/refined by a human before
+being treated as ground truth) into typed EvalQuery objects.
 """
 
 import json

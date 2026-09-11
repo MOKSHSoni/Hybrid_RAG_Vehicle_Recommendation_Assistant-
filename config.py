@@ -18,7 +18,7 @@ ENRICHED_VEHICLES_PATH = PROCESSED_DATA_DIR / "vehicles_enriched.json"
 CHUNK_STORE_PATH = INDEX_DIR / "chunk_store.json"
 FAISS_INDEX_PATH = INDEX_DIR / "faiss_index.bin"
 BM25_INDEX_PATH = INDEX_DIR / "bm25_index.pkl"
-EVAL_QUERIES_PATH = PROJECT_ROOT / "evaluation" / "queries_v1.json"
+EVAL_QUERIES_PATH = PROJECT_ROOT / "evaluation" / "queries_v2.json"
 
 # ---- Missing-value handling (generic ingestion) ----
 MISSING_VALUE_SENTINELS = {"", "-", "na", "n/a", "null", "none", "nan"}

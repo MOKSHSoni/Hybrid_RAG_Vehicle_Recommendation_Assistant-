@@ -1,0 +1,292 @@
+{
+  "_meta": {
+    "version": 2,
+    "description": "DRAFT evaluation query set for Phase 12, written by the coding agent from knowledge of the actual cars_cleaned.csv dataset gathered during Phases 1-11. This is a first draft only -- per the project spec, it must be reviewed and refined by a human before being treated as ground truth for evaluation metrics. Bump to queries_v3.json (etc.) for further revisions rather than editing this file in place.",
+    "changelog": "v2: after the numeric-range-constraints/superlative-ranking/comparison-table extension (beyond the original 14-phase spec), q23 and q24 were superlative queries the system genuinely couldn't answer reliably yet -- they're now updated with verified expected_constraints (superlative_field/superlative_direction), expected_mode=\"superlative\", and real (no longer needs_verification) expected_relevant_vehicles, computed by directly sorting the real dataset's metadata (Ferrari F8 Tributo/812 tie for fastest at 340 km/h; BMW X4 has the largest boot space at 1400L). No other entries changed from v1.",
+    "categories": [
+      "bm25_friendly", "dense_semantic", "hybrid", "multi_constraint", "exact_model",
+      "price", "follow_up_context", "query_expansion", "hyde_suitable", "no_result",
+      "relaxation", "feature_specific", "overview_style"
+    ],
+    "constraint_schema": ["brand", "fuel_types", "transmission", "seating_capacity", "body_type", "price_max_lakhs", "price_min_lakhs", "numeric_ranges", "superlative_field", "superlative_direction"],
+    "review_flags": "Entries with a \"needs_verification\" note have not been cross-checked against every row of the dataset and should be double-checked first."
+  },
+  "queries": [
+    {
+      "id": "q01",
+      "category": "bm25_friendly",
+      "query": "Porsche Cayenne price and top speed",
+      "history": [],
+      "expected_constraints": {"brand": "Porsche"},
+      "expected_relevant_vehicles": ["Porsche Cayenne", "Porsche Cayenne Coupe"],
+      "expected_mode": "exact",
+      "notes": "Exact entity name repeated in query -- should be trivial for BM25; tests that dense/hybrid don't do WORSE than BM25 alone here."
+    },
+    {
+      "id": "q02",
+      "category": "bm25_friendly",
+      "query": "BMW X5 M specifications",
+      "history": [],
+      "expected_constraints": {"brand": "BMW"},
+      "expected_relevant_vehicles": ["BMW X5 M"],
+      "expected_mode": "exact",
+      "notes": "Exact model name including the 'M' performance variant."
+    },
+    {
+      "id": "q03",
+      "category": "dense_semantic",
+      "query": "a car that won't break the bank but still feels premium",
+      "history": [],
+      "expected_constraints": {},
+      "expected_relevant_vehicles": ["Skoda/Audi/Volkswagen-tier value-premium hatchbacks or entry sedans -- needs human judgment call, not a clean keyword match"],
+      "expected_mode": "fallback",
+      "notes": "No extractable keywords (no brand/body-type/price number stated) -- pure semantic intent. Placeholder expected_relevant_vehicles needs human review; this is exactly the kind of judgment call the draft flags for refinement."
+    },
+    {
+      "id": "q04",
+      "category": "dense_semantic",
+      "query": "something spacious enough for a big family road trip",
+      "history": [],
+      "expected_constraints": {},
+      "expected_relevant_vehicles": ["Toyota Innova Crysta", "Toyota Vellfire", "Kia Carnival", "Mercedes Benz V-Class", "Mahindra Marazzo"],
+      "expected_mode": "fallback",
+      "notes": "No literal 'SUV'/'MPV'/'7 seater' keyword -- tests whether dense retrieval infers MPV/large-SUV relevance from 'spacious'/'family'/'road trip' alone."
+    },
+    {
+      "id": "q05",
+      "category": "hybrid",
+      "query": "affordable 7 seater SUV with good mileage",
+      "history": [],
+      "expected_constraints": {"body_type": "SUV", "seating_capacity": 7},
+      "expected_relevant_vehicles": ["Toyota Fortuner", "Mahindra XUV500", "Tata Safari", "MG Hector Plus", "Mahindra Scorpio"],
+      "expected_mode": "exact",
+      "notes": "Mix of hard keywords (SUV, 7 seater) and soft semantic qualifiers (affordable, good mileage) BM25 can't parse directly. Also a regression check for the v2 prompt fix: 'affordable' here must NOT set superlative_field (see llm_extraction.py's extraction prompt and test_extended_constraints.py's dedicated regression test)."
+    },
+    {
+      "id": "q06",
+      "category": "hybrid",
+      "query": "electric car with automatic transmission",
+      "history": [],
+      "expected_constraints": {"fuel_types": ["Electric"], "transmission": "Automatic"},
+      "expected_relevant_vehicles": ["Tata Nexon EV", "Hyundai Kona Electric", "Jaguar I-Pace", "Mercedes Benz EQC", "Tata Tigor EV"],
+      "expected_mode": "exact",
+      "notes": "VERIFIED against the CSV: 5 of the 6 EVs have Has_Automatic=True. MG ZS EV is the one exception -- it's flagged Has_Manual=True (a real data quirk, not an assumption to fix; single-speed EV drivetrains are almost always automatic in reality, but this dataset's source data says otherwise for this one row) -- it should be EXCLUDED here and is the expected match for q20 instead."
+    },
+    {
+      "id": "q07",
+      "category": "multi_constraint",
+      "query": "automatic diesel SUV under 20 lakh with 7 seats",
+      "history": [],
+      "expected_constraints": {"body_type": "SUV", "fuel_types": ["Diesel"], "transmission": "Automatic", "price_max_lakhs": 20.0, "seating_capacity": 7},
+      "expected_relevant_vehicles": ["needs_verification: cross-check which 7-seat diesel-automatic SUVs fall under Rs 20 Lakh"],
+      "expected_mode": "unknown",
+      "notes": "5 simultaneous constraints -- a strong test of extraction accuracy and of whether Mode A finds anything or Mode B relaxation kicks in. Expected vehicles need a human to actually filter the CSV, not estimate from memory."
+    },
+    {
+      "id": "q08",
+      "category": "multi_constraint",
+      "query": "petrol hatchback under 10 lakh with automatic transmission",
+      "history": [],
+      "expected_constraints": {"body_type": "Hatchback", "fuel_types": ["Petrol"], "price_max_lakhs": 10.0, "transmission": "Automatic"},
+      "expected_relevant_vehicles": ["Toyota Glanza", "Hyundai i20", "Tata Altroz"],
+      "expected_mode": "exact",
+      "notes": "needs_verification on exact price/transmission fit per vehicle."
+    },
+    {
+      "id": "q09",
+      "category": "exact_model",
+      "query": "tell me about the Tata Nexon EV",
+      "history": [],
+      "expected_constraints": {"brand": "Tata"},
+      "expected_relevant_vehicles": ["Tata Nexon EV"],
+      "expected_mode": "exact",
+      "notes": "Single named model, overview-style ask (not a comparison)."
+    },
+    {
+      "id": "q10",
+      "category": "exact_model",
+      "query": "what are the specs of the Hyundai Creta",
+      "history": [],
+      "expected_constraints": {"brand": "Hyundai"},
+      "expected_relevant_vehicles": ["Hyundai Creta"],
+      "expected_mode": "exact",
+      "notes": "Popular model; tests feature-chunk retrieval specifically (query says 'specs')."
+    },
+    {
+      "id": "q11",
+      "category": "price",
+      "query": "SUVs under 15 lakh",
+      "history": [],
+      "expected_constraints": {"body_type": "SUV", "price_max_lakhs": 15.0},
+      "expected_relevant_vehicles": ["Toyota Urban Cruiser", "Kia Sonet", "Kia Seltos", "Hyundai Venue", "Mahindra XUV300", "Nissan Magnite", "Renault Duster"],
+      "expected_mode": "exact",
+      "notes": "needs_verification: confirm exact price_lakhs for each against the CSV, some may be just over 15."
+    },
+    {
+      "id": "q12",
+      "category": "price",
+      "query": "cars between 50 and 100 lakh",
+      "history": [],
+      "expected_constraints": {"price_min_lakhs": 50.0, "price_max_lakhs": 100.0},
+      "expected_relevant_vehicles": ["needs_verification: many luxury sedans/SUVs fall in this band, requires a full CSV scan"],
+      "expected_mode": "exact",
+      "notes": "Range query, no body type -- broad luxury-tier band."
+    },
+    {
+      "id": "q13",
+      "category": "follow_up_context",
+      "query": "what about diesel options instead",
+      "history": [
+        {"role": "user", "content": "Show me SUVs under 20 lakh"},
+        {"role": "assistant", "content": "Here are a few SUVs under 20 lakh: Nexon, Venue, Sonet."}
+      ],
+      "expected_constraints": {"body_type": "SUV", "price_max_lakhs": 20.0, "fuel_types": ["Diesel"]},
+      "expected_relevant_vehicles": ["needs_verification: diesel SUVs under 20 Lakh"],
+      "expected_mode": "exact",
+      "notes": "Tests Phase 3 context resolution folding SUV+budget context into a bare follow-up. Confirmed during Phase 3 dev that resolve_context reliably does this in isolation."
+    },
+    {
+      "id": "q14",
+      "category": "follow_up_context",
+      "query": "any automatic ones?",
+      "history": [
+        {"role": "user", "content": "I want an affordable sedan"},
+        {"role": "assistant", "content": "Here are some affordable sedans: Honda City, Hyundai Verna, Volkswagen Vento."}
+      ],
+      "expected_constraints": {"body_type": "Sedan", "transmission": "Automatic"},
+      "expected_relevant_vehicles": ["needs_verification: which sedans from the affordable tier have Has_Automatic=True"],
+      "expected_mode": "exact",
+      "notes": "Shorter, more ambiguous follow-up than q13 -- a harder context-resolution case."
+    },
+    {
+      "id": "q15",
+      "category": "query_expansion",
+      "query": "good family car",
+      "history": [],
+      "expected_constraints": {},
+      "expected_relevant_vehicles": ["needs_verification -- deliberately vague, judge by whether expansion angles (safety/space, practicality, value) surface sensible SUVs/sedans/MPVs"],
+      "expected_mode": "fallback",
+      "notes": "Very vague -- primarily tests whether Phase 4 expansion produces genuinely different angles (not just paraphrases) that broaden useful recall."
+    },
+    {
+      "id": "q16",
+      "category": "query_expansion",
+      "query": "reliable daily driver",
+      "history": [],
+      "expected_constraints": {},
+      "expected_relevant_vehicles": ["needs_verification -- judge by expansion quality, not a fixed vehicle list"],
+      "expected_mode": "fallback",
+      "notes": "'Reliable' and 'daily driver' have no direct dataset field -- tests expansion's ability to reframe into gradeable angles (fuel economy, mainstream brand, practicality)."
+    },
+    {
+      "id": "q17",
+      "category": "hyde_suitable",
+      "query": "fun weekend car",
+      "history": [],
+      "expected_constraints": {},
+      "expected_relevant_vehicles": ["Mini Cooper", "Nissan GT-R", "BMW Z4", "Jaguar F TYPE", "MINI Cooper Convertible"],
+      "expected_mode": "fallback",
+      "notes": "Short, evocative, no literal keywords -- exactly the HyDE use case (a hypothetical listing-style description should embed closer to sporty/convertible chunks than the bare 4-word query would)."
+    },
+    {
+      "id": "q18",
+      "category": "hyde_suitable",
+      "query": "a car that turns heads",
+      "history": [],
+      "expected_constraints": {},
+      "expected_relevant_vehicles": ["Lamborghini Urus", "Lamborghini Huracan", "Ferrari F8 Tributo", "Rolls Royce Cullinan", "Nissan GT-R"],
+      "expected_mode": "fallback",
+      "notes": "Idiomatic phrase with no dataset-field mapping at all -- strong HyDE candidate."
+    },
+    {
+      "id": "q19",
+      "category": "no_result",
+      "query": "electric Ferrari",
+      "history": [],
+      "expected_constraints": {"brand": "Ferrari", "fuel_types": ["Electric"]},
+      "expected_relevant_vehicles": [],
+      "expected_mode": "relaxed_or_fallback",
+      "notes": "Confirmed: no Ferrari in the dataset is Electric (all 4 are Petrol). Mode A should return zero, forcing Mode B (most likely drops fuel_types or brand per CONSTRAINT_RELAXATION_ORDER) or Mode C."
+    },
+    {
+      "id": "q20",
+      "category": "multi_constraint",
+      "query": "manual transmission electric SUV",
+      "history": [],
+      "expected_constraints": {"transmission": "Manual", "fuel_types": ["Electric"], "body_type": "SUV"},
+      "expected_relevant_vehicles": ["MG ZS EV"],
+      "expected_mode": "exact",
+      "notes": "RECATEGORIZED after verifying the CSV directly -- this was originally guessed as a no_result case (assuming EVs are always automatic), but MG ZS EV genuinely has Has_Manual=True in this dataset. Kept as a deliberate edge-case test: proves the system doesn't hard-code the 'EVs are automatic' assumption anywhere and actually reads the real per-vehicle transmission data."
+    },
+    {
+      "id": "q20b",
+      "category": "no_result",
+      "query": "a convertible under 10 lakh",
+      "history": [],
+      "expected_constraints": {"body_type": "Convertible", "price_max_lakhs": 10.0},
+      "expected_relevant_vehicles": [],
+      "expected_mode": "relaxed",
+      "notes": "VERIFIED against the CSV: the cheapest convertible in the dataset (MINI Cooper Convertible) is Rs 40.01 Lakh -- four times the stated budget. Mode A must return zero; price_max_lakhs should widen through several quantile steps (likely exhausting all of them, since even the median price is well below 40L) before either succeeding at a much higher ceiling or the body_type constraint gets relaxed instead, depending on CONSTRAINT_RELAXATION_ORDER."
+    },
+    {
+      "id": "q21",
+      "category": "relaxation",
+      "query": "Lamborghini under 10 lakh",
+      "history": [],
+      "expected_constraints": {"brand": "Lamborghini", "price_max_lakhs": 10.0},
+      "expected_relevant_vehicles": ["Lamborghini Urus", "Lamborghini Huracan"],
+      "expected_mode": "relaxed",
+      "notes": "Confirmed: cheapest Lamborghini (Huracan) is far above Rs 10 Lakh -- Mode A must return zero, and price_max_lakhs should widen through several real quantile steps before succeeding. Good test case for the quantile-stepping logic specifically."
+    },
+    {
+      "id": "q22",
+      "category": "relaxation",
+      "query": "a Ferrari that fits the whole family",
+      "history": [],
+      "expected_constraints": {"brand": "Ferrari", "seating_capacity": 7},
+      "expected_relevant_vehicles": ["depends on which constraint relaxes first -- brand precedes seating_capacity in CONSTRAINT_RELAXATION_ORDER, so expect large 7-seat SUVs, not Ferraris"],
+      "expected_mode": "relaxed",
+      "notes": "Verified directly during Phase 10 development: every Ferrari in the dataset seats 2, so this reliably triggers relaxation (confirmed by an automated integration test, not just a guess)."
+    },
+    {
+      "id": "q23",
+      "category": "feature_specific",
+      "query": "which car has the highest top speed",
+      "history": [],
+      "expected_constraints": {"superlative_field": "top_speed_kmph", "superlative_direction": "desc"},
+      "expected_relevant_vehicles": ["Ferrari F8 Tributo", "Ferrari 812"],
+      "expected_mode": "superlative",
+      "notes": "UPDATED in v2, no longer a gap: the extended-constraints work added a direct-metadata-sort path for superlative queries. VERIFIED against the real dataset by sorting top_speed_kmph directly: Ferrari F8 Tributo and Ferrari 812 are TIED at 340 km/h (both are correct top answers; which one sorts first between an exact tie is not semantically meaningful and depends on underlying list order, so evaluation should accept either as rank 1). Next are Ferrari GTC4 Lusso (335), Porsche 911 and Nissan GT-R (both 330)."
+    },
+    {
+      "id": "q24",
+      "category": "feature_specific",
+      "query": "car with the biggest boot space",
+      "history": [],
+      "expected_constraints": {"superlative_field": "boot_space_l", "superlative_direction": "desc"},
+      "expected_relevant_vehicles": ["BMW X4"],
+      "expected_mode": "superlative",
+      "notes": "UPDATED in v2, same fix as q23. VERIFIED against the real dataset: BMW X4 has the largest boot_space_l at 1400L, well clear of the next-largest (Porsche Macan, 954L) -- no tie here, unlike q23."
+    },
+    {
+      "id": "q25",
+      "category": "overview_style",
+      "query": "show me some good SUVs",
+      "history": [],
+      "expected_constraints": {"body_type": "SUV"},
+      "expected_relevant_vehicles": ["broad -- any well-regarded SUV is a reasonable answer, no single correct set"],
+      "expected_mode": "exact",
+      "notes": "Deliberately broad browsing query -- evaluation should check the results are ALL genuinely SUVs (precision), not a specific fixed list (recall is less meaningful here)."
+    },
+    {
+      "id": "q26",
+      "category": "overview_style",
+      "query": "what electric cars do you have",
+      "history": [],
+      "expected_constraints": {"fuel_types": ["Electric"]},
+      "expected_relevant_vehicles": ["Tata Nexon EV", "Tata Tigor EV", "MG ZS EV", "Hyundai Kona Electric", "Jaguar I-Pace", "Mercedes Benz EQC"],
+      "expected_mode": "exact",
+      "notes": "All 6 EVs should ideally surface across the full result set -- good recall test for a broad category browse."
+    }
+  ]
+}

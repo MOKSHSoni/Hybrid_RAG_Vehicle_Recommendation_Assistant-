@@ -13,9 +13,9 @@ vehicle names, in rank order, before scoring.
 Queries whose expected_relevant_vehicles is empty (deliberately, e.g. the
 "no_result" category) or contains a "needs_verification" placeholder are
 excluded from these precision/recall/NDCG averages -- there's no usable
-ground truth to score against yet. See evaluation/queries_v1.json's
+ground truth to score against yet. See evaluation/queries_v2.json's
 per-entry notes for exactly which queries this affects; this is a known,
-transparent limitation of a v1 DRAFT eval set, not something this module
+transparent limitation of a DRAFT eval set, not something this module
 should silently paper over.
 """
 
