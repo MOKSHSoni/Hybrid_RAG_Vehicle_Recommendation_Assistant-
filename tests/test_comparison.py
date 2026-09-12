@@ -78,13 +78,33 @@ def test_build_comparison_rows_formats_fuel_types_as_string():
     assert rows[0]["fuel_types"] == "Petrol, Diesel"
 
 
-def test_prompt_table_renders_missing_values_as_na():
-    # The text table still shows "N/A" even though the rows carry None.
+def test_prompt_table_renders_missing_values_as_not_recorded():
+    # The text table spells missing values out even though the rows carry
+    # None. It used to render "N/A", which the model read as zero: given a
+    # Mahindra Thar whose boot space is absent from the dataset, it wrote
+    # "no boot space". Missing data must never become a claim of absence.
     rendered = format_comparison_for_prompt(
         [{"name": "A", "boot_space_l": 447.0}, {"name": "B", "boot_space_l": None}]
     )
-    assert "N/A" in rendered
+    assert "not recorded" in rendered
+    assert "N/A" not in rendered
     assert "447.0" in rendered
+
+
+def test_prompt_table_does_not_mark_a_tied_extreme():
+    # Regression: min()/max() return the FIRST row holding the extreme, so a
+    # tie was tagged as an outright winner -- two 5-seaters and one 4-seater
+    # got the first 5-seater labelled "most seats", and the model repeated it
+    # as fact. Only a uniquely-held extreme may be marked.
+    rendered = format_comparison_for_prompt(
+        [
+            {"name": "A", "seating_capacity": 5},
+            {"name": "B", "seating_capacity": 5},
+            {"name": "C", "seating_capacity": 4},
+        ]
+    )
+    assert "most seats" not in rendered  # 5 is tied, so nobody wins it
+    assert "fewest seats" in rendered  # 4 is uniquely lowest
 
 
 def test_prompt_table_marks_highest_and_lowest():
