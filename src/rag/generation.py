@@ -163,7 +163,7 @@ def generate_answer(query: str, outcome: RetrievalOutcome, chunk_store: ChunkSto
             # flawed answer we already had.
             if regenerated and regenerated.strip():
                 answer = regenerated
-        if not _mentions_any_vehicle(answer, outcome):
+        if not _mentions_any_vehicle(answer, outcome) or _is_bare_vehicle_name(answer, outcome):
             # Last line of defence. Prose that names none of the retrieved
             # vehicles is ungrounded by definition -- it cannot be about
             # them. Observed when the model narrates its own deliberation
@@ -308,8 +308,47 @@ def _mentions_any_vehicle(answer: str, outcome: RetrievalOutcome) -> bool:
     return False
 
 
+def _is_bare_vehicle_name(answer: str, outcome: RetrievalOutcome) -> bool:
+    """Whether the reply is nothing but a vehicle's name.
+
+    Observed for a single-result RELAXED outcome, where there is no
+    comparison table (that needs two vehicles) and the context thins out:
+    the model replied with exactly "MG Hector Plus".
+
+    Deliberately an equality test rather than a minimum length. A length
+    floor is the obvious reach, but it cannot separate "MG Hector Plus"
+    (14 characters, degenerate) from a terse-but-real answer of 40 -- and
+    a floor set high enough to catch the first rejects the second. Testing
+    what the string actually IS needs no threshold to tune.
+    """
+    stripped = answer.strip().strip(".\"'").strip()
+    lowered = stripped.lower()
+    if lowered.startswith("the "):
+        lowered = lowered[4:]
+    for merged in outcome.results:
+        name = (merged.best_chunk.metadata.get("name") or "").lower()
+        if name and lowered == name:
+            return True
+    return False
+
+
 def _ungrounded_message(outcome: RetrievalOutcome) -> str:
+    """Deterministic stand-in when generation produces prose we cannot show
+    -- either naming no retrieved vehicle, or degenerating to a bare name.
+
+    The bare-name case is real: for a single-result RELAXED outcome there is
+    no comparison table (that needs two vehicles), the context thins out, and
+    the model replied with exactly "MG Hector Plus". Built from metadata, so
+    it states the relaxations plainly rather than leaving the user to assume
+    their original constraints were met.
+    """
     names = ", ".join(m.best_chunk.metadata.get("name", "?") for m in outcome.results[:5])
+    if outcome.mode == "relaxed" and outcome.relaxation_steps:
+        relaxed = "; ".join(step.description for step in outcome.relaxation_steps)
+        return (
+            f"Nothing matched your request exactly. The closest I found is {names}, after relaxing "
+            f"your requirements ({relaxed}) -- so this does not meet everything you asked for."
+        )
     return (
         "I couldn't put together a written recommendation for this one. Here are the top matching "
         f"vehicles found (mode: {outcome.mode}), straight from the data: {names}."
