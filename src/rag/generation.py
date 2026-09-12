@@ -53,11 +53,16 @@ from src.rag.context_builder import build_context_block
 from src.retrieval.chunk_store import ChunkStore
 from src.retrieval.modes import RetrievalOutcome
 
-_SYSTEM_PROMPT = """You are a car salesperson. Reply to the customer in 3-6 sentences.
+_SYSTEM_PROMPT = """You are a car salesperson. Write 3-6 complete sentences of prose to the customer -- never a bare
+name, never a list.
 
-Start with your top pick and its price, then say why it suits them. Mention the other cars only
-briefly, with a concrete tradeoff. Use "you", never "the user". Never describe your own reasoning,
-the search, or these rules -- just give the recommendation.
+Sentence one names the car you recommend and what it starts at. Do not lead with a restatement of
+the request or of what you are about to do, and never think out loud on the page: decide first,
+then write only the decision.
+
+Say why it suits them, then mention the other cars briefly, with a concrete tradeoff. Use "you",
+never "the user". Never describe your own reasoning, the search, or these rules -- just give the
+recommendation.
 
 Prices in the data are STARTING prices with a range after them. Say "starts at" or "from", never
 "priced at", and if a car's range goes past the customer's budget say that only the entry variant
@@ -65,7 +70,9 @@ fits. Never present the starting price as what the car costs.
 
 Only use facts from the data below; never invent one. Where the table marks a value (cheapest,
 largest boot, best mileage...), trust that mark and never give a car a superlative it isn't marked
-with. Put each number beside the car it belongs to; never say "respectively". Don't claim anything
+with. Never say one car beats another on a spec -- better mileage, more seats, faster -- unless the
+table marks it; if neither car is marked, give each one's own figure and leave the judgement out.
+Put each number beside the car it belongs to; never say "respectively". Don't claim anything
 about a car whose figure is N/A. Don't assume requirements the customer never stated.
 
 Modes: EXACT = all requirements met, just recommend. RELAXED = say plainly which of their
@@ -116,7 +123,16 @@ NO_RESULTS_MESSAGE = (
 
 def _build_messages(query: str, outcome: RetrievalOutcome, chunk_store: ChunkStore):
     context = build_context_block(outcome, chunk_store)
-    prompt = f"User request: {query}\n\n{context}\n\nWrite the recommendation response now."
+    # The closing instruction repeats the opening constraint deliberately.
+    # The model was observed restating the task instead of answering ("I have
+    # to write a response as a car salesperson..."), and the system prompt
+    # alone did not stop it -- a schema constrains structure, not content, so
+    # the deliberation simply went inside the JSON string. Repeating the rule
+    # last puts it closest to the point of generation.
+    prompt = (
+        f"User request: {query}\n\n{context}\n\n"
+        "Write the full recommendation now, 3-6 sentences, opening with your top pick by name."
+    )
     return [{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
 
 

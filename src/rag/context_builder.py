@@ -55,10 +55,11 @@ def build_context_block(outcome: RetrievalOutcome, chunk_store: ChunkStore) -> s
         # visibly deliberating over ("...which is over 15 lakh, so it
         # doesn't meet the requirement. Wait, the...").
         lines.append(
-            f"PRICE BASIS: the budget was applied to each vehicle's STARTING price against "
-            f"Rs {price_cap} Lakh. Full ranges appear below. Where a vehicle's range goes above "
-            f"Rs {price_cap} Lakh, only its entry variant is within budget -- say so plainly "
-            f"rather than implying the whole model is."
+            f"PRICE BASIS: every vehicle below starts UNDER Rs {price_cap} Lakh -- that is what "
+            f"the budget was matched on, and none of them is 'over budget'. Where a vehicle's "
+            f"range runs past Rs {price_cap} Lakh, the entry variant still fits and only the "
+            f"higher trims do not; phrase that as 'fits at its starting price, though higher "
+            f"trims go beyond it'."
         )
 
     lines.append("")
