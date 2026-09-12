@@ -125,13 +125,32 @@ def generate_answer(query: str, outcome: RetrievalOutcome, chunk_store: ChunkSto
     messages = _build_messages(query, outcome, chunk_store)
 
     try:
-        answer = chat_text(messages=messages, timeout=config.GENERATION_FALLBACK_TIMEOUT_SECONDS)
+        answer = chat_text(
+            messages=messages,
+            timeout=config.GENERATION_FALLBACK_TIMEOUT_SECONDS,
+            max_tokens=config.GENERATION_MAX_TOKENS,
+        )
         if needs_regeneration(answer, outcome):
             # The fast schema path rambled, echoed the raw context back, or
             # trailed off incomplete -- fall back to letting the model think
             # freely (slower, ~tens of seconds, but reliably a real written
             # answer; see ollama_client.py's module docstring).
-            answer = chat_long_form(messages=messages)
+            regenerated = chat_long_form(messages=messages, max_tokens=config.GENERATION_REGEN_MAX_TOKENS)
+            # Only accept the retry if it actually produced something. The
+            # long-form path runs with thinking enabled, so a token ceiling
+            # can be consumed entirely by reasoning and return empty content
+            # -- handing the user a blank reply, strictly worse than the
+            # flawed answer we already had.
+            if regenerated and regenerated.strip():
+                answer = regenerated
+        if not _mentions_any_vehicle(answer, outcome):
+            # Last line of defence. Prose that names none of the retrieved
+            # vehicles is ungrounded by definition -- it cannot be about
+            # them. Observed when the model narrates its own deliberation
+            # ("I need to check which of these fit...") and the token
+            # ceiling cuts it off before it ever reaches a recommendation.
+            # Showing the real shortlist is honest; showing that is not.
+            return _ungrounded_message(outcome)
         return answer
     except OllamaError as e:
         return _fallback_message(outcome, e)
@@ -156,7 +175,11 @@ def generate_answer_stream(query: str, outcome: RetrievalOutcome, chunk_store: C
 
     messages = _build_messages(query, outcome, chunk_store)
     try:
-        for delta in chat_text_stream(messages=messages, timeout=config.GENERATION_FALLBACK_TIMEOUT_SECONDS):
+        for delta in chat_text_stream(
+            messages=messages,
+            timeout=config.GENERATION_FALLBACK_TIMEOUT_SECONDS,
+            max_tokens=config.GENERATION_MAX_TOKENS,
+        ):
             yield delta
     except OllamaError as e:
         yield _fallback_message(outcome, e)
@@ -207,7 +230,12 @@ def regenerate_long_form(query: str, outcome: RetrievalOutcome, chunk_store: Chu
     place.
     """
     try:
-        return chat_long_form(messages=_build_messages(query, outcome, chunk_store))
+        regenerated = chat_long_form(
+            messages=_build_messages(query, outcome, chunk_store),
+            max_tokens=config.GENERATION_REGEN_MAX_TOKENS,
+        )
+        # Empty is a failure, not a replacement -- see generate_answer().
+        return regenerated if regenerated and regenerated.strip() else None
     except OllamaError:
         return None
 
@@ -231,10 +259,41 @@ def _looks_incomplete(answer: str, outcome: RetrievalOutcome) -> bool:
     misfired on terse-but-valid answers and sent them through a needless
     (and very slow) regeneration.
     """
-    names = (m.best_chunk.metadata.get("name") for m in outcome.results)
-    if not any(name and name in answer for name in names):
+    if not _mentions_any_vehicle(answer, outcome):
         return True
     return len(answer) < _MIN_ANSWER_CHARS
+
+
+def _mentions_any_vehicle(answer: str, outcome: RetrievalOutcome) -> bool:
+    """Whether the answer actually names one of the retrieved vehicles --
+    the cheapest available grounding check.
+
+    Matches the model name with the brand dropped as well as the full
+    string, because that is how people (and the model) actually write:
+    "the Macan", "the 3 Series". Requiring the full "Porsche Macan" would
+    reject perfectly grounded prose. Deliberately permissive -- this gates
+    a safety net, and wrongly discarding a good answer costs more than
+    occasionally letting a weak one through.
+    """
+    lowered = answer.lower()
+    for merged in outcome.results:
+        name = merged.best_chunk.metadata.get("name")
+        if not name:
+            continue
+        if name.lower() in lowered:
+            return True
+        words = name.split()
+        if len(words) > 1 and " ".join(words[1:]).lower() in lowered:
+            return True
+    return False
+
+
+def _ungrounded_message(outcome: RetrievalOutcome) -> str:
+    names = ", ".join(m.best_chunk.metadata.get("name", "?") for m in outcome.results[:5])
+    return (
+        "I couldn't put together a written recommendation for this one. Here are the top matching "
+        f"vehicles found (mode: {outcome.mode}), straight from the data: {names}."
+    )
 
 
 def _fallback_message(outcome: RetrievalOutcome, error: OllamaError) -> str:
