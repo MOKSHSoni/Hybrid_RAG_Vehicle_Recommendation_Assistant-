@@ -86,6 +86,27 @@ OLLAMA_KEEP_ALIVE = "10m"
 # it, by design fails safe rather than hanging forever.
 GENERATION_FALLBACK_TIMEOUT_SECONDS = 150
 
+# Hard ceiling on tokens the model may emit for a recommendation, passed to
+# Ollama as num_predict. Without it, decoding is unbounded and a rambling
+# answer runs until the timeout kills it: profiling over 21 runs found 7
+# failures, ALL of them ReadTimeout at exactly the 150s wall, and the largest
+# decode that did finish was 891 tokens / 142.6s -- for a prompt asking for
+# 3-6 sentences. A real answer measures 100-180 tokens, so 400 leaves wide
+# headroom while bounding decode to ~65s at the observed 6.2 tok/s floor;
+# with ~40s of prompt evaluation that lands near 105s, inside the timeout.
+# Deliberately applied ONLY to generation (see src/rag/generation.py) -- the
+# extraction path must never be truncated mid-JSON.
+GENERATION_MAX_TOKENS = 600
+
+# The regeneration path (chat_long_form) needs its own, larger budget: it runs
+# with thinking ENABLED, and those reasoning tokens count against num_predict
+# too. Sharing the 600 ceiling above made the model spend its entire budget
+# reasoning and return empty content -- measured at 0 characters on 3 of 3
+# runs, which is worse for the user than the timeout it replaced. At the
+# measured 11.35 tok/s this bounds the call to ~79s, plus ~21s of prompt
+# evaluation, still inside GENERATION_FALLBACK_TIMEOUT_SECONDS.
+GENERATION_REGEN_MAX_TOKENS = 900
+
 # ---- Query understanding (Phase 3) ----
 EXTRACTION_RETRY_COUNT = 1  # retry the LLM extraction once on invalid JSON, then fall back to regex-only
 CONVERSATION_HISTORY_TURNS = 6  # how many recent turns feed context resolution

@@ -76,6 +76,7 @@ def chat(
     temperature: float = config.OLLAMA_TEMPERATURE,
     timeout: float = config.OLLAMA_TIMEOUT_SECONDS,
     think: Optional[bool] = False,
+    max_tokens: Optional[int] = None,
 ) -> str:
     """For structured (JSON schema) output. For free-form text generation,
     prefer chat_text() (fast) or chat_long_form() (slower, robust
@@ -84,14 +85,23 @@ def chat(
 
     think=None omits the parameter entirely rather than sending False --
     see module docstring for why that distinction matters.
+
+    max_tokens=None leaves decoding unbounded, which is correct for the
+    structured-extraction callers: a truncated JSON response is unusable,
+    and their outputs are tens of tokens anyway. Generation passes a real
+    ceiling (config.GENERATION_MAX_TOKENS) because unbounded decoding there
+    was the measured cause of every observed timeout.
     """
     try:
         client = ollama.Client(host=config.OLLAMA_HOST, timeout=timeout)
+        options: Dict[str, Any] = {"temperature": temperature}
+        if max_tokens is not None:
+            options["num_predict"] = max_tokens
         kwargs: Dict[str, Any] = dict(
             model=model,
             messages=messages,
             format=format,
-            options={"temperature": temperature},
+            options=options,
             keep_alive=config.OLLAMA_KEEP_ALIVE,
         )
         if think is not None:
@@ -118,6 +128,7 @@ def chat_text(
     model: str = config.OLLAMA_MODEL,
     temperature: float = config.OLLAMA_TEMPERATURE,
     timeout: float = config.OLLAMA_TIMEOUT_SECONDS,
+    max_tokens: Optional[int] = None,
 ) -> str:
     """Free-form text generation (query rewriting, HyDE descriptions,
     etc.), routed through a trivial {"result": "..."} schema for the
@@ -125,10 +136,10 @@ def chat_text(
     Detects rambling-shaped output (see looks_like_rambling) and retries
     once with a firmer instruction; falls back to the raw response if the
     model ever ignores the schema entirely."""
-    result = _chat_text_once(messages, model, temperature, timeout)
+    result = _chat_text_once(messages, model, temperature, timeout, max_tokens)
     if looks_like_rambling(result):
         firmer_messages = messages + [{"role": "user", "content": _NO_RAMBLING_INSTRUCTION}]
-        result = _chat_text_once(firmer_messages, model, temperature, timeout)
+        result = _chat_text_once(firmer_messages, model, temperature, timeout, max_tokens)
     return result
 
 
@@ -137,23 +148,37 @@ def chat_long_form(
     model: str = config.OLLAMA_MODEL,
     temperature: float = config.OLLAMA_TEMPERATURE,
     timeout: float = config.GENERATION_FALLBACK_TIMEOUT_SECONDS,
+    max_tokens: Optional[int] = None,
 ) -> str:
     """Robust (but slow) fallback for longer, more involved generation
     where chat_text()'s schema trick still rambles: lets the model think
     freely (think param omitted) and returns only message.content, which
     Ollama keeps clean of the reasoning trace regardless of task
     complexity. Strips any stray <think> tags defensively in case a given
-    model/template ever leaks them into content anyway."""
-    raw = chat(messages=messages, model=model, format=None, temperature=temperature, timeout=timeout, think=None)
+    model/template ever leaks them into content anyway.
+
+    This is the path that made unbounded decoding dangerous: with no
+    schema AND thinking enabled, nothing constrained output length, and
+    profiling found it timed out on 6 of the 10 turns that invoked it.
+    Callers should pass max_tokens."""
+    raw = chat(messages=messages, model=model, format=None, temperature=temperature, timeout=timeout,
+               think=None, max_tokens=max_tokens)
     return _THINK_TAG_RE.sub("", raw).strip()
 
 
-def _chat_text_once(messages, model, temperature, timeout) -> str:
-    raw = chat(messages=messages, model=model, format=_TEXT_SCHEMA, temperature=temperature, timeout=timeout)
+def _chat_text_once(messages, model, temperature, timeout, max_tokens=None) -> str:
+    raw = chat(messages=messages, model=model, format=_TEXT_SCHEMA, temperature=temperature,
+               timeout=timeout, max_tokens=max_tokens)
     try:
         return json.loads(raw)["result"].strip()
     except (json.JSONDecodeError, KeyError, TypeError):
-        return raw.strip()
+        # A max_tokens ceiling can stop the model mid-JSON, so the response is
+        # valid prose wrapped in a string literal that never got closed.
+        # Returning `raw` then leaks '{"result": "...' to the user verbatim
+        # (observed: 1275 characters of it). Salvage the prose with the same
+        # incremental decoder the streaming path uses before giving up.
+        salvaged = _partial_json_string(raw, "result")
+        return salvaged.strip() if salvaged else raw.strip()
 
 
 def chat_text_stream(
@@ -161,6 +186,7 @@ def chat_text_stream(
     model: str = config.OLLAMA_MODEL,
     temperature: float = config.OLLAMA_TEMPERATURE,
     timeout: float = config.GENERATION_FALLBACK_TIMEOUT_SECONDS,
+    max_tokens: Optional[int] = None,
 ) -> Iterator[str]:
     """Streaming counterpart to chat_text(), for UI surfaces that want
     first-token latency instead of waiting on a whole answer.
@@ -174,11 +200,14 @@ def chat_text_stream(
     """
     try:
         client = ollama.Client(host=config.OLLAMA_HOST, timeout=timeout)
+        options: Dict[str, Any] = {"temperature": temperature}
+        if max_tokens is not None:
+            options["num_predict"] = max_tokens
         stream = client.chat(
             model=model,
             messages=messages,
             format=_TEXT_SCHEMA,
-            options={"temperature": temperature},
+            options=options,
             keep_alive=config.OLLAMA_KEEP_ALIVE,
             think=False,
             stream=True,
