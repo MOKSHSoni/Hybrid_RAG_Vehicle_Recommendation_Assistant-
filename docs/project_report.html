@@ -1,0 +1,998 @@
+<title>Hybrid RAG Car Advisor</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+  :root{
+    --paper:#F4F6F5; --surface:#FFFFFF; --sunk:#EDF0EF;
+    --ink:#15191C; --body:#2C3338; --muted:#667079;
+    --rule:#DBE1DF; --rule-strong:#C3CCC9;
+    --accent:#0E6E77; --accent-soft:#D8E9EA; --accent-ink:#0A555C;
+    --critical:#A8321C; --critical-soft:#F3DCD6;
+    --b1:#2E7F87; --b2:#9DBBBF; --b3:#5B8C3E; --b4:#C06A24; --b5:#A8321C;
+    --shadow:0 1px 2px rgba(20,30,30,.06), 0 8px 24px -16px rgba(20,30,30,.28);
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --paper:#0E1214; --surface:#161B1E; --sunk:#111618;
+      --ink:#ECEFEE; --body:#C4CBCC; --muted:#8A9497;
+      --rule:#252D30; --rule-strong:#394448;
+      --accent:#56B8C1; --accent-soft:#12373B; --accent-ink:#8FD4DA;
+      --critical:#E38470; --critical-soft:#3B1F19;
+      --b1:#4FA5AE; --b2:#6E8E93; --b3:#7CB45C; --b4:#D98B45; --b5:#D4694F;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0E1214; --surface:#161B1E; --sunk:#111618;
+    --ink:#ECEFEE; --body:#C4CBCC; --muted:#8A9497;
+    --rule:#252D30; --rule-strong:#394448;
+    --accent:#56B8C1; --accent-soft:#12373B; --accent-ink:#8FD4DA;
+    --critical:#E38470; --critical-soft:#3B1F19;
+    --b1:#4FA5AE; --b2:#6E8E93; --b3:#7CB45C; --b4:#D98B45; --b5:#D4694F;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--paper); color:var(--body);
+    font-family:"Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size:17px; line-height:1.62;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:60rem; margin:0 auto; padding-inline:20px; padding-block:0 88px}
+  .prose{max-width:68ch}
+
+  h1,h2,h3,.eyebrow,.lede,th,.tag,.legend,.statnum,.bignum{
+    font-family:Archivo, "Helvetica Neue", Arial, sans-serif;
+  }
+  h1,h2,h3{color:var(--ink); text-wrap:balance; margin:0}
+  .eyebrow{
+    font-size:.7rem; font-weight:600; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--accent); margin:0;
+  }
+
+  /* ---------- masthead ---------- */
+  header.mast{border-bottom:2px solid var(--ink); padding-block:52px 22px; margin-bottom:36px}
+  header.mast h1{font-size:clamp(2.1rem,5.4vw,3.2rem); font-weight:700; letter-spacing:-.022em; line-height:1.04; margin-block:14px 0}
+  .sub{font-size:clamp(1rem,2.2vw,1.18rem); color:var(--muted); margin:12px 0 0; max-width:60ch; font-style:italic}
+  .mast-meta{
+    display:flex; flex-wrap:wrap; gap:8px 28px; margin-top:26px;
+    font-family:"IBM Plex Mono", ui-monospace, monospace; font-size:.76rem; color:var(--muted);
+  }
+  .mast-meta b{color:var(--body); font-weight:500}
+
+  /* ---------- stat strip ---------- */
+  .stats{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1px;
+    background:var(--rule); border:1px solid var(--rule); margin:0 0 44px;
+  }
+  .stat{background:var(--surface); padding:18px 18px 16px}
+  .statnum{font-size:1.55rem; font-weight:700; color:var(--ink); letter-spacing:-.02em; line-height:1;
+           font-variant-numeric:tabular-nums}
+  .statnum span{font-size:.82rem; font-weight:600; color:var(--muted); letter-spacing:0}
+  .statlab{font-family:Archivo,sans-serif; font-size:.67rem; font-weight:600; letter-spacing:.1em;
+           text-transform:uppercase; color:var(--muted); margin-top:8px}
+
+  /* ---------- toc ---------- */
+  nav.toc{border-left:3px solid var(--accent); padding:4px 0 4px 18px; margin:0 0 52px}
+  nav.toc ol{margin:0; padding:0; list-style:none; display:grid; gap:5px}
+  nav.toc a{
+    font-family:Archivo,sans-serif; font-size:.87rem; font-weight:500;
+    color:var(--body); text-decoration:none; display:flex; gap:12px;
+  }
+  nav.toc a:hover{color:var(--accent)}
+  nav.toc .n{font-family:"IBM Plex Mono",monospace; font-size:.76rem; color:var(--muted); min-width:1.4em}
+
+  /* ---------- sections ---------- */
+  section{margin-bottom:60px; scroll-margin-top:20px}
+  .sechead{display:flex; gap:16px; align-items:baseline; border-bottom:1px solid var(--rule-strong);
+           padding-bottom:10px; margin-bottom:26px}
+  .sechead .n{font-family:"IBM Plex Mono",monospace; font-size:.9rem; font-weight:500; color:var(--accent)}
+  .sechead h2{font-size:clamp(1.35rem,3vw,1.75rem); font-weight:600; letter-spacing:-.015em}
+  h3{font-size:1.02rem; font-weight:600; margin:34px 0 10px; letter-spacing:-.005em}
+  h3:first-of-type{margin-top:0}
+  p{margin:0 0 15px}
+  .prose ul,.prose ol{margin:0 0 15px; padding-left:1.15rem}
+  .prose li{margin-bottom:7px}
+  code{font-family:"IBM Plex Mono",monospace; font-size:.85em; background:var(--sunk);
+       border:1px solid var(--rule); border-radius:3px; padding:.08em .34em; color:var(--ink)}
+  a{color:var(--accent-ink)}
+
+  /* ---------- tables ---------- */
+  .tblwrap{overflow-x:auto; margin:0 0 12px; border:1px solid var(--rule); background:var(--surface)}
+  table{border-collapse:collapse; width:100%; min-width:520px;
+        font-family:"IBM Plex Mono",monospace; font-size:.79rem; font-variant-numeric:tabular-nums}
+  th{
+    font-family:Archivo,sans-serif; font-size:.67rem; font-weight:600; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--muted); text-align:right;
+    padding:11px 12px; border-bottom:1px solid var(--rule-strong); white-space:nowrap;
+  }
+  th:first-child,td:first-child{text-align:left}
+  th:first-child{padding-left:16px} td:first-child{padding-left:16px}
+  th:last-child{padding-right:16px} td:last-child{padding-right:16px}
+  td{padding:9px 12px; text-align:right; border-bottom:1px solid var(--rule); color:var(--body)}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover td{background:var(--sunk)}
+  td.name{font-family:Archivo,sans-serif; font-size:.8rem; font-weight:500; color:var(--ink); white-space:nowrap}
+  .hi{color:var(--accent-ink); font-weight:600}
+  .bad{color:var(--critical); font-weight:600}
+  tr.flagged td{background:var(--critical-soft)}
+  tr.flagged:hover td{background:var(--critical-soft)}
+  .cap{font-size:.79rem; color:var(--muted); margin:0 0 30px; max-width:70ch; font-style:italic}
+
+  /* ---------- bar chart ---------- */
+  .chart{background:var(--surface); border:1px solid var(--rule); padding:20px 18px 16px; margin-bottom:12px}
+  .row{display:grid; grid-template-columns:132px 1fr 58px; gap:12px; align-items:center; margin-bottom:9px}
+  .rowlab{font-family:Archivo,sans-serif; font-size:.74rem; font-weight:500; color:var(--ink);
+          text-align:right; line-height:1.25}
+  .bar{display:flex; height:19px; background:var(--sunk); overflow:hidden}
+  .bar i{display:block; height:100%}
+  .rowval{font-family:"IBM Plex Mono",monospace; font-size:.74rem; color:var(--body);
+          font-variant-numeric:tabular-nums; text-align:right}
+  .legend{display:flex; flex-wrap:wrap; gap:6px 18px; margin-top:16px; padding-top:13px;
+          border-top:1px solid var(--rule); font-size:.7rem; font-weight:500; color:var(--muted)}
+  .legend span{display:flex; align-items:center; gap:6px}
+  .sw{width:11px; height:11px; flex:none}
+
+  /* single split bar */
+  .split{display:flex; height:34px; border:1px solid var(--rule); overflow:hidden; margin-bottom:10px}
+  .split i{display:flex; align-items:center; justify-content:center; height:100%;
+           font-family:Archivo,sans-serif; font-size:.7rem; font-weight:600; color:#fff; white-space:nowrap}
+
+  /* ---------- callout ---------- */
+  .call{border:1px solid var(--rule); border-left:3px solid var(--accent); background:var(--surface);
+        padding:16px 18px; margin:0 0 22px; max-width:72ch}
+  .call.warn{border-left-color:var(--critical)}
+  .call p{margin:0 0 9px; font-size:.93rem}
+  .call p:last-child{margin-bottom:0}
+  .call .tag{font-size:.65rem; font-weight:600; letter-spacing:.12em; text-transform:uppercase;
+             color:var(--accent); display:block; margin-bottom:7px}
+  .call.warn .tag{color:var(--critical)}
+
+  /* ---------- two column ---------- */
+  .duo{display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:22px; margin-bottom:20px}
+  .duo > div{background:var(--surface); border:1px solid var(--rule); padding:18px 20px}
+  .duo h3{margin:0 0 12px; font-size:.93rem}
+  .duo ul{margin:0; padding-left:1.05rem; font-size:.91rem}
+  .duo li{margin-bottom:9px}
+  .duo li:last-child{margin-bottom:0}
+  .duo li b{font-family:Archivo,sans-serif; font-weight:600; color:var(--ink); font-size:.93em}
+
+  /* ---------- pipeline ---------- */
+  .flow{display:flex; flex-wrap:wrap; gap:7px; margin:0 0 12px}
+  .step{background:var(--surface); border:1px solid var(--rule); padding:9px 12px; flex:1 1 128px}
+  .step .k{font-family:"IBM Plex Mono",monospace; font-size:.64rem; color:var(--accent); display:block}
+  .step .v{font-family:Archivo,sans-serif; font-size:.78rem; font-weight:500; color:var(--ink);
+           display:block; margin-top:3px; line-height:1.3}
+  .step .t{font-family:"IBM Plex Mono",monospace; font-size:.68rem; color:var(--muted);
+           display:block; margin-top:5px}
+
+  /* ---------- refs ---------- */
+  ol.refs{margin:0; padding-left:1.6rem; font-size:.87rem; max-width:74ch}
+  ol.refs li{margin-bottom:11px; line-height:1.5}
+  ol.refs em{color:var(--ink)}
+
+  footer{border-top:1px solid var(--rule-strong); padding-top:18px; margin-top:20px;
+         font-family:"IBM Plex Mono",monospace; font-size:.72rem; color:var(--muted)}
+
+  @media (max-width:560px){
+    body{font-size:16px}
+    .row{grid-template-columns:96px 1fr 48px; gap:9px}
+    .rowlab{font-size:.68rem}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Project Report &middot; Hybrid Retrieval-Augmented Generation</p>
+  <h1>A Grounded Conversational Vehicle Recommender</h1>
+  <p class="sub">Sparse&ndash;dense hybrid retrieval, cross-encoder reranking and constraint-validated
+     generation over a 150-vehicle catalogue, running entirely on a CPU-only laptop.</p>
+  <div class="mast-meta">
+    <span>Corpus <b>cars_cleaned.csv &middot; 150 vehicles</b></span>
+    <span>Generator <b>Qwen3 4B (Q4_K_M) via Ollama</b></span>
+    <span>Status <b>Phases 1&ndash;13 complete + extension</b></span>
+  </div>
+</header>
+
+<div class="stats">
+  <div class="stat"><div class="statnum">150</div><div class="statlab">Vehicles indexed</div></div>
+  <div class="stat"><div class="statnum">300</div><div class="statlab">Retrievable chunks</div></div>
+  <div class="stat"><div class="statnum">308</div><div class="statlab">Tests passing</div></div>
+  <div class="stat"><div class="statnum">0.517<span> MRR</span></div><div class="statlab">Hybrid retrieval</div></div>
+  <div class="stat"><div class="statnum">43.1<span>s</span></div><div class="statlab">Median latency, after fixes</div></div>
+  <div class="stat"><div class="statnum">0</div><div class="statlab">Timeouts, after fixes</div></div>
+</div>
+
+<nav class="toc" aria-label="Contents">
+  <ol>
+    <li><a href="#s1"><span class="n">1</span> Introduction</a></li>
+    <li><a href="#s2"><span class="n">2</span> Literature Survey</a></li>
+    <li><a href="#s3"><span class="n">3</span> Methodology and Implementation</a></li>
+    <li><a href="#s4"><span class="n">4</span> Result and Analysis</a></li>
+    <li><a href="#s5"><span class="n">5</span> Advantages and Limitations</a></li>
+    <li><a href="#s6"><span class="n">6</span> Conclusion and Future Scope</a></li>
+    <li><a href="#s7"><span class="n">&mdash;</span> References</a></li>
+  </ol>
+</nav>
+
+<!-- ============ 1 ============ -->
+<section id="s1">
+  <div class="sechead"><span class="n">01</span><h2>Introduction</h2></div>
+  <div class="prose">
+    <p>Buying a car is a constrained search problem dressed up as a conversation. A shopper rarely
+    knows the catalogue; they know a budget, a body style, a number of seats, and a vague sense of
+    priorities &mdash; &ldquo;something with a big boot,&rdquo; &ldquo;the cheapest automatic.&rdquo;
+    A keyword search engine cannot interpret that, and a language model asked to answer from memory
+    will confidently invent prices.</p>
+
+    <p>This project builds a conversational recommender that does neither. It retrieves real rows
+    from a 150-vehicle dataset, filters them against constraints extracted and <em>validated in
+    Python</em>, and asks a locally-hosted language model only to write prose over facts it has
+    been handed. The system runs end to end on a 16&nbsp;GB Windows laptop with no GPU and no
+    cloud API.</p>
+
+    <h3>Objectives</h3>
+    <ul>
+      <li>Combine sparse (BM25) and dense (embedding) retrieval so both exact model names and
+      loose semantic descriptions are answerable from one index.</li>
+      <li>Extract structured constraints from natural language, and enforce them with deterministic
+      Python filters rather than trusting the model.</li>
+      <li>Degrade honestly: when nothing satisfies the request, relax constraints in a defined order
+      and <em>tell the user which requirement was dropped</em>.</li>
+      <li>Ground every generated sentence in retrieved data, and never present a synthetic artefact
+      as a real vehicle fact.</li>
+    </ul>
+
+    <h3>Design constraints</h3>
+    <p>Several decisions were fixed before implementation and held throughout, which shapes much of
+    what follows. No orchestration framework was permitted &mdash; no LangChain, no LlamaIndex &mdash;
+    so every stage is raw Python over <code>sentence-transformers</code>, <code>faiss-cpu</code>,
+    <code>rank-bm25</code> and <code>ollama</code>. Inference is local and CPU-only. The source CSV
+    is treated as immutable. Four rules were non-negotiable:</p>
+    <ul>
+      <li>The language model never directly controls metadata filtering; all filter logic passes
+      through Python validation first.</li>
+      <li>The cross-encoder never runs over the full 150-vehicle set &mdash; only over a bounded
+      candidate list.</li>
+      <li>Hypothetical (HyDE) descriptions are synthetic and are never shown as real.</li>
+      <li>Answers explicitly declare their retrieval mode and never claim an unverified constraint
+      was met.</li>
+    </ul>
+
+    <h3>Contributions</h3>
+    <p>Beyond a standard RAG pipeline, this work contributes a four-mode retrieval strategy with
+    ordered constraint relaxation; a direct-metadata-sort path for superlative queries, where
+    embeddings are structurally incapable of being correct; an LLM-independent comparison table that
+    guarantees numeric accuracy regardless of what the prose says; and a measured latency study
+    that locates the real bottleneck of small-model local RAG.</p>
+  </div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section id="s2">
+  <div class="sechead"><span class="n">02</span><h2>Literature Survey</h2></div>
+  <div class="prose">
+    <p>Retrieval-augmented generation sits on three decades of information retrieval research. The
+    survey below traces the specific lineage this system draws on, and states how each idea is used
+    here rather than merely citing it.</p>
+
+    <h3>Sparse retrieval</h3>
+    <p>BM25 (Robertson &amp; Zaragoza, 2009) remains the strongest non-neural ranking function and a
+    standard baseline. It scores documents by term frequency saturation and inverse document
+    frequency, which makes it excellent at exact lexical matching &mdash; a model name such as
+    &ldquo;Porsche Cayenne&rdquo; &mdash; and blind to paraphrase. The <code>rank-bm25</code>
+    implementation of BM25Okapi is used unmodified.</p>
+
+    <h3>Dense retrieval</h3>
+    <p>Sentence-BERT (Reimers &amp; Gurevych, 2019) made bi-encoder sentence embeddings practical by
+    training siamese BERT networks to place semantically similar text near one another in vector
+    space. Dense Passage Retrieval (Karpukhin et al., 2020) demonstrated that such embeddings can
+    outperform BM25 on open-domain question answering. This project uses
+    <code>all-MiniLM-L6-v2</code>, a 384-dimension distilled model, indexed with FAISS
+    (Johnson et al., 2019; Douze et al., 2024) using an <code>IndexFlatIP</code> exact inner-product
+    index &mdash; at 300 vectors, approximate search would trade accuracy for a speed-up that is not
+    needed.</p>
+
+    <h3>Hybrid fusion</h3>
+    <p>Sparse and dense retrieval fail in complementary ways, which motivates fusion. Reciprocal
+    Rank Fusion (Cormack et al., 2009) combines rankings without tuning; weighted score fusion
+    instead normalises and blends raw scores, requiring a mixing weight but preserving score
+    magnitude. This system uses min&ndash;max normalisation followed by weighted fusion, with the
+    weight swept empirically (Section 4).</p>
+
+    <h3>Reranking</h3>
+    <p>Bi-encoders embed query and document independently, which is what makes them fast and also
+    what limits their precision. Cross-encoders (Nogueira &amp; Cho, 2019) jointly encode the pair
+    and score it directly, giving substantially better relevance judgements at a cost that scales
+    with the number of pairs. The standard remedy &mdash; retrieve broadly, rerank narrowly &mdash;
+    is adopted here with a hard architectural limit of 30 candidates, using a
+    <code>ms-marco-MiniLM</code> checkpoint trained on MS MARCO (Nguyen et al., 2016).</p>
+
+    <h3>Retrieval-augmented generation and query transformation</h3>
+    <p>Lewis et al. (2020) introduced RAG as joint retrieval and generation for knowledge-intensive
+    tasks, establishing grounding as an alternative to parametric recall. Two later refinements are
+    implemented and evaluated here: HyDE (Gao et al., 2023), which generates a hypothetical answer
+    document and embeds <em>that</em> instead of the query, closing the vocabulary gap between
+    questions and documents; and LLM query rewriting (Ma et al., 2023), which restates a
+    conversational utterance as a standalone search query.</p>
+
+    <h3>Local small-model inference</h3>
+    <p>The generator is Qwen3 4B (Qwen Team, 2025) at Q4_K_M quantisation, served by Ollama. Qwen3
+    is a hybrid-reasoning model that emits an explicit thinking phase by default &mdash; behaviour
+    that is valuable for hard reasoning and ruinous for latency on a CPU. Suppressing it reliably
+    required grammar-constrained decoding via a JSON schema, a technique that also guarantees
+    parseable structured extraction. This interaction between reasoning modes and decoding
+    constraints proved to be one of the more consequential engineering findings of the project.</p>
+  </div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section id="s3">
+  <div class="sechead"><span class="n">03</span><h2>Methodology and Implementation</h2></div>
+  <div class="prose">
+    <p>The system is built in thirteen sequential phases, each with a working checkpoint, plus one
+    extension beyond the original specification. Implementation totals 3,701 lines across 56 source
+    modules, with 2,802 lines of tests across 26 test files.</p>
+    <h3>Per-turn pipeline</h3>
+  </div>
+
+  <div class="flow">
+    <div class="step"><span class="k">01</span><span class="v">Context resolution</span><span class="t">LLM &middot; only with history</span></div>
+    <div class="step"><span class="k">02</span><span class="v">Constraint extraction</span><span class="t">LLM + JSON schema</span></div>
+    <div class="step"><span class="k">03</span><span class="v">Python validation</span><span class="t">deterministic</span></div>
+    <div class="step"><span class="k">04</span><span class="v">Query transformation</span><span class="t">LLM</span></div>
+    <div class="step"><span class="k">05</span><span class="v">Hybrid retrieval</span><span class="t">BM25 + FAISS</span></div>
+    <div class="step"><span class="k">06</span><span class="v">Metadata filter</span><span class="t">+ relaxation</span></div>
+    <div class="step"><span class="k">07</span><span class="v">Cross-encoder rerank</span><span class="t">30 &rarr; 3</span></div>
+    <div class="step"><span class="k">08</span><span class="v">Grounded generation</span><span class="t">LLM</span></div>
+  </div>
+  <p class="cap">Stages 3, 5, 6 and 7 are pure Python and NumPy; the four LLM calls are the entire
+  latency budget, as Section 4 quantifies.</p>
+
+  <div class="prose">
+    <h3>Ingestion, enrichment and chunking</h3>
+    <p>The source CSV carries 150 rows and 34 columns, spanning 26 brands, prices from
+    &#8377;3.18&nbsp;lakh to &#8377;950&nbsp;lakh (median &#8377;54.78&nbsp;lakh), 10 fuel types and
+    seating capacities from 2 to 8. The file is never modified. A normalisation layer parses
+    composite text fields into typed metadata &mdash; price bands, mileage and engine-displacement
+    ranges, boot space, ground clearance, top speed, transmission availability &mdash; and an
+    extensible enrichment interface derives fields the raw data only implies, most notably body
+    type, which is inferred from dimensions and ground clearance.</p>
+
+    <div class="call warn">
+      <span class="tag">Correctness note</span>
+      <p>The first body-type heuristic ordered its checks by ground clearance before length, which
+      misclassified several hatchbacks as SUVs and three hatchbacks as sedans. The rule was corrected
+      and then verified exhaustively against all 150 rows rather than spot-checked &mdash; a
+      reminder that derived metadata is a correctness surface, not a convenience.</p>
+    </div>
+
+    <p>Each vehicle is split by a custom recursive character chunker into exactly two chunks: a
+    <code>product_overview</code> and a <code>features</code> chunk, giving 300 chunks averaging 331
+    characters. Two chunks per vehicle keeps each unit topically coherent while ensuring a vehicle
+    is retrievable by either its positioning or its specifications.</p>
+
+    <h3>Query understanding and the validation boundary</h3>
+    <p>Constraint extraction asks the model for JSON conforming to a schema, then discards anything
+    that does not validate. Two schemas exist: a 7-field core schema and a 19-field extended schema,
+    selected by a cheap lexical test, because grammar-constrained decoding latency scales with the
+    number of required fields. Any failure &mdash; timeout, malformed JSON, invalid enum &mdash;
+    falls back to regex extraction rather than to an unconstrained model.</p>
+
+    <div class="call">
+      <span class="tag">Architectural rule</span>
+      <p>The model proposes constraints; it never applies them. Extracted values are validated
+      against known brands, enumerated body types and transmissions, and numeric bounds before any
+      filtering occurs. A hallucinated brand becomes a dropped constraint, not a wrong result set.</p>
+    </div>
+
+    <p>An early failure illustrates why the boundary matters: asked to &ldquo;suggest cars of
+    bmw,&rdquo; the extractor invented seventeen unrequested fields and the system recommended a
+    Volvo. Making the schema fields optional did not fix it; an explicitly anti-inventive prompt did.
+    A separate defect had the superlative detector matching <code>\w+est</code> inside the word
+    &ldquo;sugg&#8288;est.&rdquo;</p>
+
+    <h3>Retrieval modes</h3>
+    <p>Retrieval resolves into one of four declared modes, and the mode is always surfaced to the
+    user:</p>
+    <ul>
+      <li><b>Exact</b> &mdash; every extracted constraint is satisfied.</li>
+      <li><b>Relaxed</b> &mdash; constraints are dropped in a configured order, softer preferences
+      first (top speed, boot space, ground clearance, mileage, engine size) and budget later. Price
+      widens by real dataset quantiles rather than an arbitrary percentage. Every dropped constraint
+      is reported.</li>
+      <li><b>Fallback</b> &mdash; no constraint could be verified; results are semantic matches only,
+      and the answer says so.</li>
+      <li><b>Superlative</b> &mdash; &ldquo;cheapest,&rdquo; &ldquo;fastest,&rdquo; &ldquo;biggest
+      boot.&rdquo; Handled by a direct Python sort over metadata, bypassing retrieval entirely.</li>
+    </ul>
+
+    <div class="call">
+      <span class="tag">Why superlatives bypass retrieval</span>
+      <p>Embeddings and BM25 have no notion of numeric magnitude. The genuinely cheapest vehicle may
+      not appear in the top-K at all, so no amount of reranking can rescue the answer. Sorting
+      metadata directly is not an optimisation here &mdash; it is the only construction that can be
+      correct.</p>
+    </div>
+
+    <h3>Generation and its guardrails</h3>
+    <p>The generation prompt carries the retrieval mode, both chunks for each returned vehicle, and
+    a precomputed comparison table in which each column's extreme is already tagged
+    (&ldquo;cheapest,&rdquo; &ldquo;largest boot&rdquo;). Precomputing extremes means the model reads
+    comparisons instead of deriving them &mdash; it cannot get arithmetic wrong if it never does any.
+    This followed an observed failure in which the model reported two boot volumes
+    &ldquo;respectively,&rdquo; swapped, and called a 515&nbsp;L boot less practical than a
+    480&nbsp;L one.</p>
+
+    <p>Four detectors gate the output: meta-narration, context echo, incompleteness, and surviving
+    prompt placeholders. A failing answer is regenerated through a slower unconstrained path; if that
+    fails, the original is kept rather than replaced with an error.</p>
+
+    <div class="call warn">
+      <span class="tag">Prompt contamination</span>
+      <p>The prompt originally contained a worked example. Its &ldquo;7-seater&rdquo; framing leaked
+      into answers for queries that never mentioned seats. Replacing the example with bracketed
+      placeholders simply produced a new leak &mdash; &ldquo;For exactly what you asked for, the BMW
+      3 Series&hellip;&rdquo; &mdash; the instruction text itself with brackets stripped. Worked
+      examples were removed entirely. Whatever enters the prompt as an example leaves it as output.</p>
+    </div>
+
+    <h3>Configuration</h3>
+  </div>
+
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>Parameter</th><th>Value</th><th>Rationale</th></tr></thead>
+      <tbody>
+        <tr><td class="name">Embedding model</td><td>all-MiniLM-L6-v2 (384-d)</td><td>CPU-viable bi-encoder</td></tr>
+        <tr><td class="name">Vector index</td><td>FAISS IndexFlatIP &middot; 300</td><td>exact search at this scale</td></tr>
+        <tr><td class="name">Cross-encoder</td><td>ms-marco-MiniLM-L-6-v2</td><td>configurable checkpoint</td></tr>
+        <tr><td class="name">Chunk size / overlap</td><td>500 / 50 chars</td><td>custom recursive chunker</td></tr>
+        <tr><td class="name">Fusion weight (BM25 : dense)</td><td>0.3 : 0.7</td><td>swept, Section 4</td></tr>
+        <tr><td class="name">Rerank candidates &rarr; final</td><td>30 &rarr; 3</td><td>never the full 150</td></tr>
+        <tr><td class="name">Generator</td><td>qwen3:4b (Q4_K_M)</td><td>local, CPU-only</td></tr>
+        <tr><td class="name">Generation timeout</td><td>150 s</td><td>60 s for other calls</td></tr>
+        <tr><td class="name">Model keep-alive</td><td>10 min</td><td>reduced from 30 min</td></tr>
+        <tr><td class="name">History window</td><td>6 turns</td><td>context resolution</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="cap">A 30-minute keep-alive pinned 3.4&nbsp;GB resident and left roughly 2.3&nbsp;GB free,
+  producing read timeouts that presented as model slowness but were memory pressure.</p>
+</section>
+
+<!-- ============ 4 ============ -->
+<section id="s4">
+  <div class="sechead"><span class="n">04</span><h2>Result and Analysis</h2></div>
+  <div class="prose">
+    <h3>Retrieval quality</h3>
+    <p>Seven retrieval configurations were evaluated at Top-5 against the same query set. Latency is
+    end-to-end for the retrieval stage only.</p>
+  </div>
+
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>Configuration</th><th>P@K</th><th>R@K</th><th>MRR</th><th>NDCG@K</th><th>Success</th><th>Latency</th></tr></thead>
+      <tbody>
+        <tr><td class="name">BM25 alone</td><td>0.215</td><td>0.414</td><td>0.453</td><td>0.415</td><td>0.529</td><td>1 ms</td></tr>
+        <tr><td class="name">Dense alone</td><td>0.271</td><td>0.415</td><td>0.461</td><td>0.421</td><td>0.588</td><td>23 ms</td></tr>
+        <tr><td class="name">Hybrid</td><td class="hi">0.285</td><td>0.469</td><td class="hi">0.517</td><td>0.471</td><td class="hi">0.647</td><td class="hi">18 ms</td></tr>
+        <tr><td class="name">Hybrid + Expansion</td><td>0.237</td><td>0.480</td><td>0.522</td><td>0.483</td><td class="hi">0.706</td><td class="bad">8,080 ms</td></tr>
+        <tr><td class="name">Hybrid + Transformation</td><td>0.285</td><td>0.449</td><td>0.517</td><td>0.455</td><td>0.647</td><td class="bad">3,319 ms</td></tr>
+        <tr><td class="name">Hybrid + HyDE</td><td>0.278</td><td class="hi">0.492</td><td class="hi">0.531</td><td class="hi">0.493</td><td>0.647</td><td class="bad">11,460 ms</td></tr>
+        <tr><td class="name">Hybrid + Cross-Encoder</td><td>0.235</td><td class="hi">0.492</td><td>0.505</td><td>0.492</td><td>0.588</td><td>888 ms</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="cap">n = 17 queries with usable ground truth, drawn from a 27-query set spanning 13
+  categories. Ground truth is an agent-drafted set pending human review &mdash; see the caveat below.</p>
+
+  <div class="prose">
+    <p>Hybrid fusion beats both of its components on every metric, which is the central result: BM25
+    alone reaches 0.215 P@K, dense alone 0.271, and their fusion 0.285, with MRR rising from 0.453
+    and 0.461 to 0.517. The two methods fail on different queries, and combining them recovers both.</p>
+
+    <p>The refinements are more equivocal, and reporting them honestly matters more than reporting
+    them favourably. HyDE achieves the best MRR (0.531) and ties the best recall (0.492) &mdash; but
+    costs 11.5 seconds, roughly 640&times; the hybrid baseline. Query expansion produces the best
+    success rate (0.706) at 8.1 seconds. Both are implemented and available but deliberately left
+    out of the default path; the measured gain does not justify the latency.</p>
+
+    <p>The cross-encoder result is genuinely mixed. It improves recall (0.469&nbsp;&rarr;&nbsp;0.492)
+    and NDCG (0.471&nbsp;&rarr;&nbsp;0.492) while <em>reducing</em> precision
+    (0.285&nbsp;&rarr;&nbsp;0.235) and success rate (0.647&nbsp;&rarr;&nbsp;0.588). It surfaces more
+    relevant vehicles overall but is less reliable at putting one in the top position on this query
+    set. At n&nbsp;=&nbsp;17 with draft labels, this difference should be treated as suggestive
+    rather than settled.</p>
+
+    <h3>Fusion weight sweep</h3>
+  </div>
+
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>BM25 : Dense</th><th>P@K</th><th>MRR</th><th>NDCG@K</th></tr></thead>
+      <tbody>
+        <tr><td class="name">10 : 90</td><td>0.280</td><td>0.473</td><td>0.438</td></tr>
+        <tr><td class="name">20 : 80</td><td>0.274</td><td>0.471</td><td>0.440</td></tr>
+        <tr><td class="name">30 : 70 &nbsp;<em>(configured)</em></td><td>0.285</td><td>0.517</td><td>0.471</td></tr>
+        <tr><td class="name">40 : 60</td><td class="hi">0.290</td><td>0.520</td><td class="hi">0.481</td></tr>
+        <tr><td class="name">50 : 50</td><td>0.271</td><td class="hi">0.522</td><td>0.467</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="cap">The configured 30:70 weight is not the sweep optimum &mdash; 40:60 scores higher on
+  P@K and NDCG, and 50:50 on MRR. The spread across all five settings is roughly 0.02, well within
+  what 17 queries can resolve, so the difference is not treated as significant.</p>
+
+  <div class="prose">
+    <h3>Query understanding accuracy</h3>
+    <p>Per-field agreement between extracted and expected constraints:</p>
+  </div>
+
+  <div class="chart">
+    <div class="row"><div class="rowlab">brand</div><div class="bar"><i style="width:100%;background:var(--b1)"></i></div><div class="rowval">100%</div></div>
+    <div class="row"><div class="rowlab">fuel&nbsp;types</div><div class="bar"><i style="width:100%;background:var(--b1)"></i></div><div class="rowval">100%</div></div>
+    <div class="row"><div class="rowlab">transmission</div><div class="bar"><i style="width:100%;background:var(--b1)"></i></div><div class="rowval">100%</div></div>
+    <div class="row"><div class="rowlab">price&nbsp;max</div><div class="bar"><i style="width:100%;background:var(--b1)"></i></div><div class="rowval">100%</div></div>
+    <div class="row"><div class="rowlab">price&nbsp;min</div><div class="bar"><i style="width:100%;background:var(--b1)"></i></div><div class="rowval">100%</div></div>
+    <div class="row"><div class="rowlab">body&nbsp;type</div><div class="bar"><i style="width:88.9%;background:var(--b4)"></i></div><div class="rowval">88.9%</div></div>
+    <div class="row"><div class="rowlab">seating&nbsp;capacity</div><div class="bar"><i style="width:66.7%;background:var(--b5)"></i></div><div class="rowval">66.7%</div></div>
+  </div>
+  <p class="cap">Lexically explicit fields extract perfectly. The two weakest are the two that
+  require inference &mdash; body type is derived, not stated, and seating capacity is often implied
+  (&ldquo;for a family&rdquo;) rather than given as a number.</p>
+
+  <div class="prose">
+    <h3>End-to-end latency</h3>
+    <p>Seven representative query types were each run three times on the target hardware after a
+    warm-up call, instrumenting both the pipeline's own stage timers and Ollama's internal token
+    counters &mdash; 21 measured queries in total. Repeating each type is what makes the failure
+    pattern below interpretable: it distinguishes a query type that <em>reliably</em> fails from one
+    that occasionally does.</p>
+  </div>
+
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>Query type</th><th>Answered</th><th>Min</th><th>Median</th><th>Max</th><th>Generation</th><th>Mode</th><th>Calls</th></tr></thead>
+      <tbody>
+        <tr class="flagged"><td class="name">simple exact</td><td class="bad">0 / 3</td><td>180.9</td><td class="bad">194.8</td><td>223.8</td><td class="bad">175.6</td><td>exact</td><td>4</td></tr>
+        <tr><td class="name">multi-constraint</td><td class="hi">3 / 3</td><td>51.9</td><td>52.6</td><td>117.9</td><td>22.3</td><td>exact</td><td>3</td></tr>
+        <tr><td class="name">superlative</td><td class="hi">3 / 3</td><td>39.6</td><td>42.3</td><td>74.0</td><td>15.0</td><td>superlative</td><td>3</td></tr>
+        <tr class="flagged"><td class="name">brand only</td><td class="bad">2 / 3</td><td>155.3</td><td>161.4</td><td>178.7</td><td class="bad">150.7</td><td>exact</td><td>4</td></tr>
+        <tr><td class="name">vague / fallback</td><td class="hi">3 / 3</td><td>57.1</td><td>68.6</td><td>79.4</td><td>56.2</td><td>fallback</td><td>4</td></tr>
+        <tr><td class="name">unsatisfiable</td><td class="hi">3 / 3</td><td class="hi">25.6</td><td class="hi">44.8</td><td>46.2</td><td>33.8</td><td>relaxed</td><td>3</td></tr>
+        <tr class="flagged"><td class="name">follow-up (history)</td><td class="bad">0 / 3</td><td>162.3</td><td class="bad">163.6</td><td>170.6</td><td class="bad">150.6</td><td>fallback</td><td>4</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="cap">All figures in seconds; generation column is the median for that type. Shaded rows
+  contain runs that produced no answer. Across answered queries only: minimum 25.6&nbsp;s, median
+  54.8&nbsp;s, maximum 178.7&nbsp;s, mean 73.8&nbsp;s. Across all 21 runs including failures: median
+  79.4&nbsp;s, maximum 223.8&nbsp;s, mean 109.1&nbsp;s. Retrieval never exceeded 1.4&nbsp;s in any
+  run. One-time startup adds 16.7&nbsp;s; a retrieval-only turn (generation skipped) completes in
+  11.2&nbsp;s.</p>
+
+  <div class="chart">
+    <div class="row"><div class="rowlab">simple exact <b style="color:var(--critical)">0/3</b></div><div class="bar"><i style="width:4.2%;background:var(--b1)"></i><i style="width:1.4%;background:var(--b2)"></i><i style="width:0.5%;background:var(--b3)"></i><i style="width:90.1%;background:var(--b5)"></i></div><div class="rowval">194.8</div></div>
+    <div class="row"><div class="rowlab">follow-up <b style="color:var(--critical)">0/3</b></div><div class="bar"><i style="width:4.5%;background:var(--b1)"></i><i style="width:1.5%;background:var(--b2)"></i><i style="width:0.7%;background:var(--b3)"></i><i style="width:77.3%;background:var(--b5)"></i></div><div class="rowval">163.6</div></div>
+    <div class="row"><div class="rowlab">brand only <b style="color:var(--critical)">2/3</b></div><div class="bar"><i style="width:3.4%;background:var(--b1)"></i><i style="width:1.7%;background:var(--b2)"></i><i style="width:0.5%;background:var(--b3)"></i><i style="width:77.4%;background:var(--b5)"></i></div><div class="rowval">161.4</div></div>
+    <div class="row"><div class="rowlab">vague / fallback <b>3/3</b></div><div class="bar"><i style="width:3.7%;background:var(--b1)"></i><i style="width:1.4%;background:var(--b2)"></i><i style="width:0.6%;background:var(--b3)"></i><i style="width:28.9%;background:var(--b4)"></i></div><div class="rowval">68.6</div></div>
+    <div class="row"><div class="rowlab">multi-constraint <b>3/3</b></div><div class="bar"><i style="width:13.1%;background:var(--b1)"></i><i style="width:2.3%;background:var(--b2)"></i><i style="width:0.2%;background:var(--b3)"></i><i style="width:11.5%;background:var(--b4)"></i></div><div class="rowval">52.6</div></div>
+    <div class="row"><div class="rowlab">unsatisfiable <b>3/3</b></div><div class="bar"><i style="width:4.2%;background:var(--b1)"></i><i style="width:1.6%;background:var(--b2)"></i><i style="width:0.1%;background:var(--b3)"></i><i style="width:17.4%;background:var(--b4)"></i></div><div class="rowval">44.8</div></div>
+    <div class="row"><div class="rowlab">superlative <b>3/3</b></div><div class="bar"><i style="width:12.4%;background:var(--b1)"></i><i style="width:1.4%;background:var(--b2)"></i><i style="width:0%;background:var(--b3)"></i><i style="width:7.7%;background:var(--b4)"></i></div><div class="rowval">42.3</div></div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--b1)"></i>Query understanding</span>
+      <span><i class="sw" style="background:var(--b2)"></i>Transformation</span>
+      <span><i class="sw" style="background:var(--b3)"></i>Retrieval + relaxation</span>
+      <span><i class="sw" style="background:var(--b4)"></i>Generation (completed)</span>
+      <span><i class="sw" style="background:var(--b5)"></i>Generation (hit 150 s wall)</span>
+    </div>
+  </div>
+  <p class="cap">Median values per query type, all bars on one shared scale. The bold fraction is how
+  many of three runs produced an answer. The three slowest types are precisely the three where
+  generation ran into the timeout wall; retrieval &mdash; the part this project actually builds
+  &mdash; is the sliver that never exceeds 1.4&nbsp;s.</p>
+
+  <div class="prose">
+    <h3>Where the time goes</h3>
+    <p>Across the model calls that completed, the split is:</p>
+  </div>
+
+  <div class="split">
+    <i style="width:28.8%;background:var(--b4)">Prompt evaluation &middot; 342 s</i>
+    <i style="width:71.2%;background:var(--b1)">Decoding &middot; 846 s</i>
+  </div>
+  <p class="cap">39,698 prompt tokens were consumed to produce 6,133 generated tokens &mdash; a ratio
+  of 6.5 : 1. Measured throughput held steady at ~6.2&ndash;7.8 tokens/s for decoding. Note this
+  excludes the seven calls that timed out, whose decoding time is unmeasured but bounded below by
+  150&nbsp;s each; counting them would push decoding's share higher still. An earlier single-pass
+  profile put the split at 52% / 47%; the difference is that this run captured more of the long
+  regeneration decodes described below.</p>
+
+  <div class="prose">
+    <h3>Cost by prompt type</h3>
+    <p>Per-call figures below are from the single-pass profile, which instrumented each prompt type
+    in isolation; the cache-hit and cache-miss columns are the same prompt measured in both states.</p>
+  </div>
+
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>Prompt</th><th>Input tokens</th><th>Cache miss</th><th>Cache hit</th></tr></thead>
+      <tbody>
+        <tr><td class="name">Context resolution <em>(history only)</em></td><td>~130</td><td>6.1 s</td><td class="hi">2.0 s</td></tr>
+        <tr><td class="name">Constraint extraction &mdash; core (7 fields)</td><td>~410</td><td>26.7 s</td><td class="hi">6.5 s</td></tr>
+        <tr><td class="name">Constraint extraction &mdash; extended (19 fields)</td><td>~820</td><td>44.2 s</td><td class="hi">22.5 s</td></tr>
+        <tr><td class="name">Query transformation</td><td>~130</td><td>5.5 s</td><td class="hi">2.0 s</td></tr>
+        <tr><td class="name">Final generation</td><td>~1,300</td><td class="bad">30&ndash;90 s</td><td>rarely hits</td></tr>
+        <tr><td class="name">Regeneration (unconstrained)</td><td>~1,390</td><td>&mdash;</td><td>25.0 s</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="prose">
+    <p>The variance between identical-sized prompts is the most actionable finding in the study.
+    Ollama reuses a key-value cache when a prompt shares a prefix with the previous request, and the
+    difference is not marginal:</p>
+    <ul>
+      <li>~400-token prompts: 13.8&nbsp;s, 10.9&nbsp;s, then 0.6&nbsp;s, 0.6&nbsp;s, 0.6&nbsp;s,
+      0.6&nbsp;s &mdash; a <b>23&times; spread</b> at constant size.</li>
+      <li>~800-token prompts: 21.7&nbsp;s, then 0.6&nbsp;s.</li>
+      <li>~1,300-token generation prompts: 46.7&nbsp;s, 39.6&nbsp;s, 42.9&nbsp;s &mdash; effectively
+      never cached, because the retrieved-vehicle context differs on every query.</li>
+    </ul>
+    <p>The shared system prompt caches after the first few calls; the per-query context block cannot.
+    That fixed ~40&nbsp;s of prompt evaluation is paid on every single request. The generation prompt
+    decomposes as 916 characters of system prompt, 1,979 characters of vehicle text (two chunks each
+    for three vehicles) and a 685-character comparison table &mdash; 3,882 characters, about 1,213
+    tokens.</p>
+
+    <h3>Failure analysis</h3>
+    <p>Seven of 21 runs (33%) produced no recommendation, returning instead the graceful fallback
+    text &mdash; a list of matching vehicle names with no commentary. Every one of the seven was a
+    <code>ReadTimeout</code> at exactly 150.0&nbsp;s, the configured generation ceiling. Two query
+    types failed all three times; one failed once.</p>
+
+    <p>Repeating each query three times isolates the mechanism. The failures are not random, and they
+    are not spread evenly: they track almost perfectly with whether the quality detectors fired and
+    triggered a regeneration.</p>
+  </div>
+
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>Path taken</th><th>Answered</th><th>Failed</th><th>Failure rate</th></tr></thead>
+      <tbody>
+        <tr><td class="name">3 calls &mdash; no regeneration</td><td>10</td><td>1</td><td class="hi">9%</td></tr>
+        <tr><td class="name">4+ calls &mdash; regeneration fired</td><td>4</td><td>6</td><td class="bad">60%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="cap">A turn that triggers regeneration is roughly seven times more likely to fail than one
+  that does not.</p>
+
+  <div class="prose">
+    <div class="call warn">
+      <span class="tag">Root cause: the regeneration path is unbounded</span>
+      <p>When a quality detector rejects the first answer, the system retries through
+      <code>chat_long_form</code> &mdash; deliberately unconstrained, with no JSON schema and the
+      model's thinking phase left enabled. Nothing bounds how much it emits: the Ollama call sets
+      only <code>temperature</code>, and no <code>num_predict</code> ceiling is configured anywhere.</p>
+      <p>The clearest evidence is the largest decode that <em>did</em> finish: <b>891 tokens in
+      142.6&nbsp;s</b>, clearing the 150-second wall by seven seconds, in response to a prompt asking
+      for three to six sentences. Runs that emitted marginally more simply hit the wall. At the
+      measured 6.2&ndash;7.8&nbsp;tokens/s, a 250-token cap would bound decoding to roughly
+      32&nbsp;s and convert every one of these timeouts into an answer.</p>
+      <p>This also reframes the fix. Capping output is necessary, but the regeneration trigger is
+      itself worth revisiting: the system currently discards a delivered, readable answer and gambles
+      a 150-second retry on producing a better one &mdash; a gamble it loses 60% of the time.</p>
+    </div>
+
+    <h3>Remediation and re-measurement</h3>
+    <p>The diagnosis above was acted on and the profile re-run under identical conditions. Generation
+    now carries a token ceiling, the regeneration path has its own larger budget because reasoning
+    tokens count against that ceiling too, a response truncated mid-JSON is salvaged rather than
+    leaked to the user, and prose that names none of the retrieved vehicles is replaced by the real
+    shortlist.</p>
+  </div>
+
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>Measure</th><th>Before</th><th>After</th><th>Change</th></tr></thead>
+      <tbody>
+        <tr><td class="name">Timeouts (150 s wall)</td><td>7 / 21</td><td class="hi">0 / 21</td><td class="hi">eliminated</td></tr>
+        <tr><td class="name">Median latency</td><td>54.8 s</td><td class="hi">43.1 s</td><td>&minus;21%</td></tr>
+        <tr><td class="name">Worst case</td><td>223.8 s</td><td class="hi">118.6 s</td><td>&minus;47%</td></tr>
+        <tr><td class="name">Test suite runtime</td><td>70 min</td><td class="hi">4.3 min</td><td>&minus;94%</td></tr>
+        <tr><td class="name">Decode throughput</td><td>7.25 tok/s</td><td class="hi">11.35 tok/s</td><td>+57%</td></tr>
+        <tr><td class="name">Prefill throughput</td><td>116 tok/s</td><td class="hi">277 tok/s</td><td>+139%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="cap">Between the two runs the machine was also restarted, freeing 3&nbsp;GB and dropping
+  commit charge from 20.0&nbsp;GB to 11.3&nbsp;GB of its limit.</p>
+
+  <div class="prose">
+    <div class="call">
+      <span class="tag">Attribution: the machine, not the code, drove the speed</span>
+      <p>It would be easy to credit the token ceiling for the whole improvement. The data does not
+      support that. A token cap cannot change tokens-per-second, yet decode throughput rose 57% and
+      prefill 139% &mdash; those are machine effects. The decisive check is the three query types
+      that never reach the ceiling at all: <code>superlative</code>, <code>multi-constraint</code>
+      and <code>unsatisfiable</code> still improved 38&ndash;41%, with no contribution from the code
+      change whatsoever.</p>
+      <p>The honest split: <b>the restart bought the speed; the cap bought the reliability.</b> The
+      ceiling's contribution is bounding the runaway generations &mdash; worst-case output fell from
+      891 tokens to the cap &mdash; which is what removed the timeouts.</p>
+    </div>
+
+    <div class="call warn">
+      <span class="tag">Two regressions the fix introduced, and what they taught</span>
+      <p>A single shared ceiling broke two things that only measurement caught. Because
+      <code>chat_long_form</code> runs with thinking enabled and reasoning tokens count against
+      <code>num_predict</code>, the model spent its entire budget thinking and returned <b>empty
+      content on 3 of 3 runs</b> &mdash; worse for the user than the timeout it replaced. Separately,
+      a ceiling can stop the model mid-JSON, and the old error branch returned the raw text, leaking
+      1,275 characters of <code>{"result": "...</code> verbatim.</p>
+      <p>Both are now fixed, but the lesson generalises: a fix aimed at one failure mode can create
+      another that the original metric does not measure. The success check in the first profiling
+      script tested only for the timeout message, so it scored those empty answers as successes and
+      reported 21/21. The real figure was 18/21.</p>
+    </div>
+
+    <h3>Accuracy: the price-basis defect</h3>
+    <p>Separately from latency, re-reading the generated answers surfaced a correctness problem that
+    no timing metric would ever show. Every vehicle's <code>price_lakhs</code> is its
+    <em>starting</em> price &mdash; verified, it equals <code>Price_Min_Lakhs</code> for all 150 rows
+    &mdash; so a budget filter matches the entry variant, not the whole model. Ten vehicles have a
+    base under &#8377;15&nbsp;lakh and a top variant above it; the Tata Safari spans
+    &#8377;14.69&ndash;21.45&nbsp;lakh. The system was presenting &#8377;14.69&nbsp;lakh as simply
+    what the car costs.</p>
+    <p>The filter is unchanged &mdash; matching on starting price is the correct reading of
+    &ldquo;cars under &#8377;15&nbsp;lakh.&rdquo; What changed is the claim built on top of it: the
+    context block now states the basis, and the prompt requires &ldquo;starts at&rdquo; over
+    &ldquo;priced at.&rdquo; Answers now read <em>&ldquo;Hyundai Verna starts at &#8377;9.11 Lakh
+    &hellip; The Mahindra Thar starts at &#8377;10 Lakh.&rdquo;</em></p>
+    <p>This also resolved a contradiction the model had been visibly deliberating over: the context
+    labelled a result EXACT while showing a range above the budget, and that reasoning leaked into
+    the answer (<em>&ldquo;&hellip;which is over 15 lakh, so it doesn't meet the requirement. Wait,
+    the&hellip;&rdquo;</em>). A latency symptom with an accuracy cause.</p>
+
+    <h3>Fact-checking the answers against the dataset</h3>
+    <p>With the pipeline finally answering every query type, each generated claim was checked against
+    the source CSV rather than read for plausibility. Three were false, and two of them originated in
+    this project's own Python rather than in the model.</p>
+  </div>
+
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>False claim produced</th><th>What the data says</th><th>Origin</th></tr></thead>
+      <tbody>
+        <tr><td class="name">&ldquo;it offers the most seats (5)&rdquo;</td><td>Two vehicles tie at 5</td><td class="bad">tagging code</td></tr>
+        <tr><td class="name">&ldquo;no boot space&rdquo;</td><td>Boot space is absent, not zero</td><td class="bad">table rendering</td></tr>
+        <tr><td class="name">&ldquo;the Yaris has better fuel efficiency&rdquo;</td><td>Yaris 18.0 vs Verna 25.0 kmpl</td><td>model</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="cap">The first two are the more serious: the prompt instructs the model to trust the
+  table's marks, so a wrong mark becomes a wrong answer with the model behaving exactly as told.</p>
+
+  <div class="prose">
+    <div class="call warn">
+      <span class="tag">A tie is not a winner</span>
+      <p>The superlative tagger took <code>min()</code> and <code>max()</code> over each column, and
+      both return the <em>first</em> row holding that value. With two five-seaters and one
+      four-seater, the first five-seater was silently labelled &ldquo;most seats.&rdquo; The model
+      then repeated it as fact, correctly following instructions. Only uniquely-held extremes are
+      marked now, with a regression test.</p>
+      <p>The wider point: the comparison table was introduced precisely so numbers could not be
+      garbled by generation. That reasoning holds only while the table itself is right &mdash; moving
+      a claim into Python makes it authoritative, which raises rather than lowers the cost of a bug
+      in it.</p>
+    </div>
+
+    <p>The missing-value case is the same principle. Rendering an absent measurement as
+    &ldquo;N/A&rdquo; invited the model to read it as zero and report &ldquo;no boot space&rdquo; for
+    a vehicle whose boot simply is not in the dataset &mdash; turning missing data into a confident
+    claim of absence. It now renders &ldquo;not recorded.&rdquo;</p>
+
+    <p>The third is the model's own: inverted pairwise comparatives. The existing rule governed
+    superlatives (&ldquo;cheapest,&rdquo; &ldquo;largest boot&rdquo;) and said nothing about
+    comparisons between two cars, which is exactly where the errors occurred. Unmarked comparisons
+    are now forbidden outright rather than asked to be accurate &mdash; every extreme is already
+    computed in Python, so the model never needs to derive one.</p>
+
+    <p>After the fixes, &ldquo;cars under 15 lakh&rdquo; verifies clean on every checkable claim:
+    largest boot (480 vs 476&nbsp;L), best fuel efficiency (25 vs 18 vs 15.2&nbsp;kmpl), higher
+    price, fewer seats, and better top speed (230 vs 200&nbsp;km/h). Two minor defects persist in the
+    SUV query: the word &ldquo;respectively&rdquo; still appears despite an explicit ban, and boot
+    space is compared against a vehicle whose boot is unrecorded.</p>
+
+    <div class="call">
+      <span class="tag">Instruction literalism</span>
+      <p>The narration fix took two attempts. Phrased as <em>&ldquo;your first word is the name of
+      the car,&rdquo;</em> both test queries returned a bare <code>Mahindra Thar</code> &mdash; 13
+      characters, no recommendation. Scoping the rule to the first <em>sentence</em>, while keeping
+      &ldquo;3-6 complete sentences&rdquo; dominant, produced correct prose. Constraining where
+      something appears is safe; phrasing it as what the reply <em>is</em> replaces the content. The
+      same literalism had already appeared earlier in this project, when a worked example's
+      &ldquo;7-seater&rdquo; framing leaked into unrelated answers.</p>
+    </div>
+
+    <h3>Verification</h3>
+    <p>The full suite is 308 tests across 26 files, all passing, with no skips. It now completes in
+    roughly 4&ndash;8 minutes, down from about 70 before the remediation and the restart. The live
+    model tests genuinely execute: the Ollama availability probe originally allowed 10&nbsp;seconds,
+    while a cold model load was measured at 70.4&nbsp;s, so whenever the model had been evicted every
+    language-model test skipped silently. A silent skip is worse than a failure &mdash; it presents
+    as coverage while providing none.</p>
+    <p>The suite also caught what review did not. A grounding guard written to require the full
+    vehicle name (&ldquo;Porsche Macan&rdquo;) was rejected by a test whose fixture said &ldquo;the
+    Macan&rdquo; &mdash; genuinely grounded prose. Had that shipped, it would have silently discarded
+    good answers in production, since both the model and real customers routinely drop the brand.</p>
+
+    <div class="call warn">
+      <span class="tag">Validity caveats</span>
+      <p><b>Ground truth is a draft.</b> The 27-query evaluation set was drafted by the coding agent
+      and is explicitly marked as requiring human review before its numbers are treated as final.
+      Only 17 queries carry usable labels. All retrieval metrics above inherit that caveat.</p>
+      <p><b>Latency is n&nbsp;=&nbsp;3 per query type</b> (21 runs), single machine, warm model.
+      Three repetitions establish which query types fail reliably but remain too few for confident
+      interval estimates; the spread within a type is real, with <code>multi-constraint</code>
+      ranging 51.9&ndash;117.9&nbsp;s. The machine had 4.0&nbsp;GB free of 15.6&nbsp;GB at the start
+      of the run against a ~3.4&nbsp;GB model, so memory pressure cannot be fully excluded as a
+      contributor to the slower tail.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section id="s5">
+  <div class="sechead"><span class="n">05</span><h2>Advantages and Limitations</h2></div>
+
+  <div class="duo">
+    <div>
+      <h3>Advantages</h3>
+      <ul>
+        <li><b>Fully local.</b> No API key, no per-query cost, no data leaving the machine. The
+        catalogue and every query stay on the laptop.</li>
+        <li><b>Numerically trustworthy.</b> Comparison tables and superlative rankings are computed
+        in Python from metadata. The model cannot garble a figure it never calculated.</li>
+        <li><b>Honest degradation.</b> Four declared modes mean the user is told when a constraint
+        was relaxed or when nothing could be verified &mdash; instead of silently receiving
+        plausible-looking wrong results.</li>
+        <li><b>Hybrid retrieval measurably works.</b> Fusion beats both components on every metric
+        at 18&nbsp;ms, the clearest positive result in the evaluation.</li>
+        <li><b>Hallucination containment by construction.</b> The model proposes constraints but
+        never applies them, so an invented brand degrades to a dropped filter rather than a wrong
+        answer.</li>
+        <li><b>Genuinely tested.</b> 307 passing tests including live-model paths, with the
+        instrumentation to prove they ran.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Limitations</h3>
+      <ul>
+        <li><b>Latency remains outside conversational expectations.</b> A 43.1&nbsp;s median and
+        118.6&nbsp;s worst case after remediation are far better than before, and still far too slow
+        for a chat interface.</li>
+        <li><b>Answer accuracy is verified only by spot-check.</b> Claims were fact-checked against the
+        CSV for two query types, not systematically across the eval set. Two minor defects persist:
+        a banned word (&ldquo;respectively&rdquo;) still appears, and one comparison is made against
+        an unrecorded value.</li>
+        <li><b>Evaluation rests on draft labels.</b> 17 labelled queries, agent-authored, pending
+        human review. Differences under ~0.05 should not be read as real.</li>
+        <li><b>Corpus is small and static.</b> 150 vehicles, 300 chunks. Nothing here has been tested
+        at a scale where exact FAISS search or in-memory BM25 would stop being appropriate.</li>
+        <li><b>Seating and body type extract unreliably</b> (66.7% and 88.9%) &mdash; precisely the
+        inferred rather than stated fields.</li>
+        <li><b>HyDE and expansion are measured but unused</b>, their accuracy gains not justifying
+        8&ndash;11&nbsp;s of added latency.</li>
+        <li><b>Single-machine results.</b> Every figure reflects one CPU-only Windows laptop.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section id="s6">
+  <div class="sechead"><span class="n">06</span><h2>Conclusion and Future Scope</h2></div>
+  <div class="prose">
+    <p>The system demonstrates that a grounded, constraint-aware conversational recommender can be
+    built from primitives alone &mdash; no orchestration framework &mdash; and run without a GPU.
+    The retrieval architecture is sound and fast: hybrid fusion outperforms both BM25 and dense
+    retrieval on every measured metric while adding 18&nbsp;milliseconds, and the constraint
+    validation boundary keeps a small, hallucination-prone model from ever directly controlling
+    what the user sees.</p>
+
+    <p>The honest conclusion is that <em>retrieval was never the hard part</em>. Every retrieval
+    stage combined costs under 1.4&nbsp;seconds in all 21 profiled runs. Well over 99% of each query
+    is local language-model inference. The engineering difficulty in small-model local RAG lies in
+    prompt economics and output control, not in the search stack.</p>
+
+    <p>The repeated profile sharpened this into a specific defect, since fixed. The system's own
+    quality guardrail had been its largest source of failure: when a detector rejected an answer, the
+    unbounded retry it triggered exceeded the timeout 60% of the time, so a third of all queries
+    returned no recommendation at all. Bounding generated tokens eliminated every timeout.</p>
+
+    <p>Three lessons survive the specifics. <b>Measure the fix, not just the bug</b> &mdash; the
+    token ceiling cured the timeouts and introduced empty answers, which the original success metric
+    scored as passes. <b>Separate the variables</b> &mdash; most of the apparent speed-up came from
+    restarting the machine, not from the code, and only the query types that never touch the ceiling
+    revealed that. And <b>the defect that mattered most was never visible in a timing chart</b>: the
+    system was quietly presenting a car's entry-variant price as its price, which no latency
+    measurement would ever surface and no user would forgive.</p>
+
+    <h3>Future scope</h3>
+    <p>The following are ordered by measured impact, and each addresses a specific finding above
+    rather than a general aspiration.</p>
+    <ul>
+      <li><b>Assert answer accuracy in the test suite.</b> The three false claims found here were caught
+      by reading answers against the CSV by hand. A test that checks generated comparatives against
+      metadata would catch the next one automatically.</li>
+      <li><b>Reconsider when regeneration fires.</b> It is invoked on roughly half of all turns.
+      Narrowing the detectors would avoid paying for a second generation on answers that were
+      adequate to begin with.</li>
+      <li><b>Trim the generation context.</b> The <code>features</code> chunk contributes roughly
+      1,168 of 3,882 prompt characters while the comparison table already carries the specifications
+      that matter &mdash; an estimated 11&nbsp;s saving per query, to be validated against answer
+      quality.</li>
+      <li><b>Merge query understanding and transformation</b> into a single call, removing one full
+      round trip from every request.</li>
+      <li><b>Stabilise the extraction schema.</b> Alternating between the 7-field and 19-field
+      schemas defeats the prefix cache; committing to one trades tokens for cache hits, and which
+      wins is an empirical question worth measuring.</li>
+      <li><b>Complete the human review of the evaluation set</b>, so retrieval metrics can be quoted
+      as results rather than as machinery validation, and re-run the fusion sweep on reviewed labels.</li>
+      <li><b>Revisit the cross-encoder's role</b>, given that it currently trades precision for
+      recall on this query set.</li>
+      <li><b>Phase 14 &mdash; Langfuse tracing</b>, deferred by design until the pipeline worked end
+      to end, would replace the ad-hoc instrumentation written for this study.</li>
+      <li><b>Hardware or hosting.</b> At ~1,861 prompt and ~270 generated tokens per query, a hosted
+      model or any GPU would bring responses into the 3&ndash;7&nbsp;second range. That trades away
+      the offline, zero-cost, private-by-construction properties that motivated the local design, and
+      would mask rather than fix the unbounded-decoding defect &mdash; so it is a deliberate
+      trade-off, not a strict upgrade.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ refs ============ -->
+<section id="s7">
+  <div class="sechead"><span class="n">&mdash;</span><h2>References</h2></div>
+  <ol class="refs">
+    <li>Robertson, S. &amp; Zaragoza, H. (2009). <em>The Probabilistic Relevance Framework: BM25 and
+    Beyond.</em> Foundations and Trends in Information Retrieval, 3(4).</li>
+    <li>Reimers, N. &amp; Gurevych, I. (2019). <em>Sentence-BERT: Sentence Embeddings using Siamese
+    BERT-Networks.</em> EMNLP.</li>
+    <li>Karpukhin, V., O&#712;uz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D. &amp; Yih, W.
+    (2020). <em>Dense Passage Retrieval for Open-Domain Question Answering.</em> EMNLP.</li>
+    <li>Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N., et al. (2020).
+    <em>Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks.</em> NeurIPS.</li>
+    <li>Nogueira, R. &amp; Cho, K. (2019). <em>Passage Re-ranking with BERT.</em> arXiv:1901.04085.</li>
+    <li>Johnson, J., Douze, M. &amp; J&eacute;gou, H. (2019). <em>Billion-scale Similarity Search
+    with GPUs.</em> IEEE Transactions on Big Data.</li>
+    <li>Douze, M., Guzhva, A., Deng, C., Johnson, J., Szilvasy, G., Mazar&eacute;, P.-E., Lomeli, M.,
+    Hosseini, L. &amp; J&eacute;gou, H. (2024). <em>The Faiss Library.</em> arXiv:2401.08281.</li>
+    <li>Cormack, G., Clarke, C. &amp; B&uuml;ttcher, S. (2009). <em>Reciprocal Rank Fusion Outperforms
+    Condorcet and Individual Rank Learning Methods.</em> SIGIR.</li>
+    <li>Gao, L., Ma, X., Lin, J. &amp; Callan, J. (2023). <em>Precise Zero-Shot Dense Retrieval
+    without Relevance Labels (HyDE).</em> ACL.</li>
+    <li>Ma, X., Gong, Y., He, P., Zhao, H. &amp; Duan, N. (2023). <em>Query Rewriting for
+    Retrieval-Augmented Large Language Models.</em> EMNLP.</li>
+    <li>Nguyen, T., Rosenberg, M., Song, X., Gao, J., Tiwary, S., Majumder, R. &amp; Deng, L. (2016).
+    <em>MS MARCO: A Human Generated MAchine Reading COmprehension Dataset.</em> NIPS Workshop on
+    Cognitive Computation.</li>
+    <li>Qwen Team, Alibaba Group (2025). <em>Qwen3 Technical Report.</em> arXiv:2505.09388.</li>
+    <li>Ollama (2025). <em>Ollama: Run Large Language Models Locally.</em> https://ollama.com</li>
+  </ol>
+</section>
+
+<footer>
+  Measurements taken on a 16&nbsp;GB Windows 11 laptop, CPU-only inference, qwen3:4b (Q4_K_M) served
+  by Ollama. Retrieval metrics from the Phase&nbsp;12 evaluation run; latency figures from a
+  dedicated profiling run instrumenting Ollama&rsquo;s token counters. Source corpus unmodified
+  throughout.
+</footer>
+
+</div>
