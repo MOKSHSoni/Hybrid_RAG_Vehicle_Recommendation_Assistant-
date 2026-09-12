@@ -42,6 +42,25 @@ def build_context_block(outcome: RetrievalOutcome, chunk_store: ChunkStore) -> s
             "not by search relevance -- this is an exact ranking, not a semantic guess."
         )
 
+    price_cap = getattr(outcome.original_constraints, "price_max_lakhs", None)
+    if price_cap is not None:
+        # Every row's price_lakhs IS its starting price (verified: price_lakhs
+        # == Price_Min_Lakhs for all 150 rows), so the budget filter matches
+        # the entry variant, not the whole range. 10 vehicles have a base
+        # under 15 lakh and a top variant above it -- the Tata Safari spans
+        # Rs 14.69-21.45 Lakh. Saying "the Safari at Rs 14.69 Lakh fits your
+        # budget" is then true only of the cheapest trim, and stating the
+        # basis is the difference between an accurate answer and a
+        # misleading one. It also resolves a contradiction the model was
+        # visibly deliberating over ("...which is over 15 lakh, so it
+        # doesn't meet the requirement. Wait, the...").
+        lines.append(
+            f"PRICE BASIS: the budget was applied to each vehicle's STARTING price against "
+            f"Rs {price_cap} Lakh. Full ranges appear below. Where a vehicle's range goes above "
+            f"Rs {price_cap} Lakh, only its entry variant is within budget -- say so plainly "
+            f"rather than implying the whole model is."
+        )
+
     lines.append("")
     lines.append(f"RETRIEVED VEHICLES ({len(outcome.results)}), most relevant first:")
 
