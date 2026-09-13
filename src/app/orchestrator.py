@@ -16,7 +16,7 @@ demo_phase4.py/demo_phase5.py/demo_phase12.py exercise them directly.
 
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import FrozenSet, List, Optional
 
 from src.app.logging_utils import PipelineLog
 from src.pipeline import KnowledgeBase, build_knowledge_base
@@ -24,6 +24,13 @@ from src.query.expansion import expand_query
 from src.query.hyde import generate_hypothetical_description
 from src.query.models import ConversationTurn
 from src.query.regex_extraction import known_brands_from_chunk_store
+from src.query.scope import (
+    OFF_TOPIC_MESSAGE,
+    build_vehicle_vocabulary,
+    is_off_topic,
+    unknown_brand,
+    unknown_brand_message,
+)
 from src.query.transformation import transform_query
 from src.query.understanding import understand_query
 from src.rag.generation import generate_answer
@@ -32,7 +39,7 @@ from src.retrieval.bm25.retriever import BM25Retriever
 from src.retrieval.dense.hyde_retriever import HydeRetriever
 from src.retrieval.dense.retriever import DenseRetriever
 from src.retrieval.hybrid.hybrid_retriever import HybridRetriever
-from src.retrieval.modes import RetrievalOutcome, retrieve_with_relaxation
+from src.retrieval.modes import MODE_OUT_OF_SCOPE, RetrievalOutcome, retrieve_with_relaxation
 
 
 @dataclass
@@ -47,6 +54,10 @@ class Pipeline:
     hyde: HydeRetriever
     reranker: CrossEncoderReranker
     known_brands: List[str]
+    # Built lazily from the knowledge base on first use (see
+    # _scope_answer), so callers constructing a Pipeline directly need not
+    # supply it.
+    vehicle_vocabulary: Optional[FrozenSet[str]] = None
 
     @classmethod
     def build(cls) -> "Pipeline":
@@ -88,6 +99,22 @@ def answer_query(
     log.add_timing("query_understanding", (time.time() - t0) * 1000)
     log.extraction_method = understanding.extraction_method
     log.standalone_query = understanding.standalone_query
+
+    # Refuse before retrieving, not after. Semantic fallback always returns
+    # *something*, so an out-of-scope request would otherwise come back as
+    # a list of confident-looking but unrelated recommendations. Checked on
+    # the standalone query, so a follow-up like "what about cheaper ones"
+    # is judged on its history-resolved meaning rather than its bare words.
+    refusal = _scope_answer(pipeline, understanding)
+    if refusal is not None:
+        log.mode = MODE_OUT_OF_SCOPE
+        return TurnResult(
+            answer=refusal,
+            outcome=RetrievalOutcome(
+                mode=MODE_OUT_OF_SCOPE, results=[], original_constraints=understanding.constraints
+            ),
+            log=log,
+        )
 
     t0 = time.time()
     transformed = transform_query(understanding.standalone_query)
@@ -140,3 +167,15 @@ def answer_query(
         expansion_queries=expansion_queries,
         hyde_description=hyde_description,
     )
+
+
+def _scope_answer(pipeline: Pipeline, understanding) -> Optional[str]:
+    """A refusal message if the request is outside the catalogue, else None."""
+    brand = unknown_brand(understanding.constraints, pipeline.known_brands)
+    if brand is not None:
+        return unknown_brand_message(brand, pipeline.known_brands)
+    if pipeline.vehicle_vocabulary is None:
+        pipeline.vehicle_vocabulary = build_vehicle_vocabulary(pipeline.kb.chunk_store, pipeline.known_brands)
+    if is_off_topic(understanding.standalone_query, understanding.constraints, pipeline.vehicle_vocabulary):
+        return OFF_TOPIC_MESSAGE
+    return None

@@ -16,6 +16,7 @@ from src.query.models import ConversationTurn
 from src.query.ollama_client import is_reachable
 from src.rag.comparison import build_comparison_rows
 from src.rag.generation import generate_answer_stream, needs_regeneration, regenerate_long_form
+from src.retrieval.modes import MODE_OUT_OF_SCOPE
 
 st.set_page_config(page_title="Car Sales Assistant", page_icon="🚗", layout="wide")
 
@@ -24,6 +25,7 @@ MODE_LABELS = {
     "relaxed": ("Relaxed match -- some requirements were loosened", "orange"),
     "fallback": ("Semantic fallback -- no requirements verified", "red"),
     "superlative": ("Ranked by exact metadata sort, not relevance", "blue"),
+    "out_of_scope": ("Outside this catalogue -- nothing recommended", "gray"),
 }
 
 
@@ -184,31 +186,39 @@ def main() -> None:
                     st.error(f"Something went wrong while answering: {e}")
                     st.stop()
 
-            answer_slot = st.empty()
-            started = time.time()
-            try:
-                with answer_slot.container():
-                    answer = st.write_stream(
-                        generate_answer_stream(user_input, result.outcome, pipeline.kb.chunk_store)
-                    )
-            except Exception as e:
-                st.error(f"Something went wrong while writing the answer: {e}")
-                st.stop()
+            if result.log.mode == MODE_OUT_OF_SCOPE:
+                # The orchestrator already wrote the refusal and retrieved
+                # nothing. Streaming a generation here would hand the model
+                # an empty result set and invite exactly the invented answer
+                # the refusal exists to prevent.
+                st.markdown(result.answer)
+                render_result(result)
+            else:
+                answer_slot = st.empty()
+                started = time.time()
+                try:
+                    with answer_slot.container():
+                        answer = st.write_stream(
+                            generate_answer_stream(user_input, result.outcome, pipeline.kb.chunk_store)
+                        )
+                except Exception as e:
+                    st.error(f"Something went wrong while writing the answer: {e}")
+                    st.stop()
 
-            # The quality checks need the whole text, so they run post-stream;
-            # a failed check replaces what was streamed via the slower path.
-            if needs_regeneration(answer, result.outcome):
-                with st.spinner("Improving that answer..."):
-                    better = regenerate_long_form(user_input, result.outcome, pipeline.kb.chunk_store)
-                # None means the retry failed -- keep the answer already on
-                # screen rather than replacing real content with an error.
-                if better:
-                    answer = better
-                    answer_slot.markdown(answer)
+                # The quality checks need the whole text, so they run post-stream;
+                # a failed check replaces what was streamed via the slower path.
+                if needs_regeneration(answer, result.outcome):
+                    with st.spinner("Improving that answer..."):
+                        better = regenerate_long_form(user_input, result.outcome, pipeline.kb.chunk_store)
+                    # None means the retry failed -- keep the answer already on
+                    # screen rather than replacing real content with an error.
+                    if better:
+                        answer = better
+                        answer_slot.markdown(answer)
 
-            result.answer = answer
-            result.log.add_timing("generation (streamed)", (time.time() - started) * 1000)
-            render_result(result)
+                result.answer = answer
+                result.log.add_timing("generation (streamed)", (time.time() - started) * 1000)
+                render_result(result)
 
         st.session_state.messages.append({"role": "assistant", "content": result.answer, "result": result})
         st.session_state.history.append(ConversationTurn(role="user", content=user_input))

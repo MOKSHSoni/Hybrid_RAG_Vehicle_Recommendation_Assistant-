@@ -54,6 +54,10 @@ MODE_EXACT = "exact"
 MODE_RELAXED = "relaxed"
 MODE_FALLBACK = "fallback"
 MODE_SUPERLATIVE = "superlative"
+# Not a retrieval mode: set when the request is refused before retrieval
+# runs at all (off-topic, or a brand the catalogue does not carry). See
+# src/query/scope.py.
+MODE_OUT_OF_SCOPE = "out_of_scope"
 
 
 @dataclass
