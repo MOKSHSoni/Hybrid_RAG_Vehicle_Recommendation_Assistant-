@@ -9,7 +9,7 @@ from src.query.context import resolve_context
 from src.query.llm_extraction import extract_constraints_via_llm
 from src.query.models import Constraints, ConversationTurn, QueryUnderstandingResult
 from src.query.ollama_client import OllamaError
-from src.query.regex_extraction import extract_regex_constraints
+from src.query.regex_extraction import budget_word_sort_order, extract_regex_constraints
 from src.query.scope import match_known_brand
 
 
@@ -21,7 +21,7 @@ def understand_query(
     standalone_query = resolve_context(query, history)
 
     try:
-        constraints = _canonicalise_brand(extract_constraints_via_llm(standalone_query), known_brands)
+        constraints = _normalise(extract_constraints_via_llm(standalone_query), standalone_query, known_brands)
         return QueryUnderstandingResult(
             original_query=query,
             standalone_query=standalone_query,
@@ -32,7 +32,9 @@ def understand_query(
         # OllamaError: the server call itself failed/timed out -- fall back
         # immediately, do not retry against a dead endpoint.
         # ValueError: invalid JSON/schema even after the LLM-side retry.
-        constraints = extract_regex_constraints(standalone_query, known_brands)
+        constraints = _normalise(
+            extract_regex_constraints(standalone_query, known_brands), standalone_query, known_brands
+        )
         return QueryUnderstandingResult(
             original_query=query,
             standalone_query=standalone_query,
@@ -40,6 +42,25 @@ def understand_query(
             extraction_method="regex_fallback",
             extraction_error=str(e),
         )
+
+
+def _normalise(constraints: Constraints, query: str, known_brands: List[str]) -> Constraints:
+    """Post-extraction fixes that must hold whichever extractor ran.
+
+    Applied here, at the one point both paths pass through, because
+    putting them in the regex extractor alone is a silent no-op in
+    production: the LLM path is the normal one and the regex path only
+    runs when Ollama is down. A budget-word rule added to the regex
+    extractor passed its tests and changed nothing a user could see.
+    """
+    constraints = _canonicalise_brand(constraints, known_brands)
+    if constraints.superlative_field is None:
+        field, direction = budget_word_sort_order(
+            query, constraints.price_min_lakhs, constraints.price_max_lakhs
+        )
+        if field:
+            constraints = replace(constraints, superlative_field=field, superlative_direction=direction)
+    return constraints
 
 
 def _canonicalise_brand(constraints: Constraints, known_brands: List[str]) -> Constraints:

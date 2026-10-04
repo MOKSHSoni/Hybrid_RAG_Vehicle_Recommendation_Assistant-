@@ -382,3 +382,56 @@ def test_to_constraints_drops_range_that_is_entirely_a_no_op():
 def test_to_constraints_keeps_a_real_fuel_preference():
     payload = dict(_VALID_PAYLOAD, fuel_types=["Diesel"])
     assert _to_constraints(payload).fuel_types == ["Diesel"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["affordable 7 seater suv", "budget hatchback", "cheap petrol car", "an inexpensive sedan",
+     "economical family car", "pocket-friendly suv", "value for money hatchback"],
+)
+def test_budget_words_rank_by_price_when_no_figure_given(query):
+    # Regression: "affordable" extracted nothing at all, so the word was
+    # silently discarded. "affordable 7 seater suv" returned the three MOST
+    # expensive 7-seat SUVs (Rs 93-104 Lakh) while a Bolero at Rs 8.12 Lakh
+    # went unshown -- and the answer still called it an EXACT match.
+    constraints = extract_regex_constraints(query, KNOWN_BRANDS)
+    assert constraints.superlative_field == "price_lakhs"
+    assert constraints.superlative_direction == "asc"
+
+
+@pytest.mark.parametrize(
+    "query", ["affordable SUV under 15 lakh", "cheap car under 5 lakh", "budget sedan below 10 lakh"]
+)
+def test_budget_words_defer_to_an_explicit_figure(query):
+    # The customer asked for options within a budget, not the single
+    # cheapest thing in it -- so the price ceiling does the work and no
+    # sort is imposed. An explicit "cheapest" still wins (below).
+    constraints = extract_regex_constraints(query, KNOWN_BRANDS)
+    assert constraints.price_max_lakhs is not None
+    assert constraints.superlative_field is None
+
+
+def test_explicit_cheapest_beats_an_explicit_figure():
+    constraints = extract_regex_constraints("cheapest SUV under 15 lakh", KNOWN_BRANDS)
+    assert constraints.price_max_lakhs is not None
+    assert constraints.superlative_field == "price_lakhs"
+    assert constraints.superlative_direction == "asc"
+
+
+def test_expensive_still_sorts_the_other_way():
+    assert extract_superlative("most expensive suv") == ("price_lakhs", "desc")
+
+
+def test_affordable_query_returns_the_cheapest_matches(pipeline_components):
+    from src.query.regex_extraction import extract_regex_constraints, known_brands_from_chunk_store
+
+    chunk_store, hybrid, reranker = pipeline_components
+    brands = known_brands_from_chunk_store(chunk_store)
+    constraints = extract_regex_constraints("affordable 7 seater suv", brands)
+    outcome = retrieve_with_relaxation(
+        "affordable 7 seater suv", constraints, chunk_store, hybrid, reranker
+    )
+    prices = [m.best_chunk.metadata.get("price_lakhs") for m in outcome.results]
+    assert outcome.mode == "superlative"
+    assert prices == sorted(prices)
+    assert max(prices) < 20  # not the Rs 93-104 Lakh luxury SUVs it used to return

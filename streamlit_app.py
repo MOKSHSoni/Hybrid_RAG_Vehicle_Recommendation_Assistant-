@@ -15,7 +15,11 @@ from src.app.orchestrator import Pipeline, answer_query
 from src.query.models import ConversationTurn
 from src.query.ollama_client import is_reachable
 from src.rag.comparison import build_comparison_rows
-from src.rag.generation import generate_answer_stream, needs_regeneration, regenerate_long_form
+from src.rag.generation import (
+    finalise_streamed_answer,
+    generate_answer_stream,
+    looks_like_meta_narration,
+)
 from src.retrieval.modes import MODE_OUT_OF_SCOPE
 
 st.set_page_config(page_title="Car Sales Assistant", page_icon="🚗", layout="wide")
@@ -197,24 +201,38 @@ def main() -> None:
                 answer_slot = st.empty()
                 started = time.time()
                 try:
-                    with answer_slot.container():
-                        answer = st.write_stream(
-                            generate_answer_stream(user_input, result.outcome, pipeline.kb.chunk_store)
-                        )
+                    # Stream by hand rather than st.write_stream so the text
+                    # can be inspected as it arrives. The model sometimes
+                    # narrates its own reasoning ("The customer asked for a
+                    # fast BMW, and the retrieved vehicles are...") and
+                    # st.write_stream would paint all of that on screen
+                    # before any check could run. Stop at the first sign of
+                    # it and let the slower path write the real answer.
+                    answer = ""
+                    narrating = False
+                    for delta in generate_answer_stream(
+                        user_input, result.outcome, pipeline.kb.chunk_store
+                    ):
+                        answer += delta
+                        if looks_like_meta_narration(answer):
+                            narrating = True
+                            break
+                        answer_slot.markdown(answer)
                 except Exception as e:
                     st.error(f"Something went wrong while writing the answer: {e}")
                     st.stop()
 
-                # The quality checks need the whole text, so they run post-stream;
-                # a failed check replaces what was streamed via the slower path.
-                if needs_regeneration(answer, result.outcome):
-                    with st.spinner("Improving that answer..."):
-                        better = regenerate_long_form(user_input, result.outcome, pipeline.kb.chunk_store)
-                    # None means the retry failed -- keep the answer already on
-                    # screen rather than replacing real content with an error.
-                    if better:
-                        answer = better
-                        answer_slot.markdown(answer)
+                if narrating:
+                    answer_slot.empty()
+
+                # One shared gate with the non-streaming path, so the app
+                # cannot drift away from it: regenerate if needed, and never
+                # show prose that names none of the retrieved vehicles.
+                with st.spinner("Writing the recommendation..." if narrating else "Checking that answer..."):
+                    answer = finalise_streamed_answer(
+                        answer, user_input, result.outcome, pipeline.kb.chunk_store
+                    )
+                answer_slot.markdown(answer)
 
                 result.answer = answer
                 result.log.add_timing("generation (streamed)", (time.time() - started) * 1000)

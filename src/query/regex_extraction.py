@@ -68,9 +68,20 @@ def known_brands_from_chunk_store(chunk_store: ChunkStore) -> List[str]:
     return sorted(b for b in brands if b)
 
 
+# Vague budget words. Unlike "cheapest" these are a SOFT signal, applied
+# only when the customer gave no explicit figure -- see
+# budget_word_sort_order for why that distinction matters.
+_BUDGET_WORD_RE = re.compile(
+    r"\baffordable\b|\bbudget\b|\binexpensive\b|\beconomical\b|\bcheap\b"
+    r"|\bvalue for money\b|\bpocket[- ]friendly\b|\blow[- ]cost\b"
+)
+
+
 def extract_regex_constraints(query: str, known_brands: List[str]) -> Constraints:
     price_min, price_max = extract_price_constraints(query)
     superlative_field, superlative_direction = extract_superlative(query)
+    if superlative_field is None:
+        superlative_field, superlative_direction = budget_word_sort_order(query, price_min, price_max)
     return Constraints(
         brand=extract_brand_constraint(query, known_brands),
         fuel_types=extract_fuel_constraints(query),
@@ -83,6 +94,33 @@ def extract_regex_constraints(query: str, known_brands: List[str]) -> Constraint
         superlative_field=superlative_field,
         superlative_direction=superlative_direction,
     )
+
+
+def budget_word_sort_order(
+    query: str, price_min: Optional[float], price_max: Optional[float]
+) -> Tuple[Optional[str], Optional[str]]:
+    """Rank by price, cheapest first, when the customer said "affordable"
+    but gave no figure.
+
+    Without this the word is silently discarded: "affordable 7 seater suv"
+    returned the three MOST expensive 7-seat SUVs in the catalogue
+    (Rs 93-104 Lakh) while a Mahindra Bolero at Rs 8.12 Lakh went unshown,
+    and the answer still called it an EXACT match on the requirements.
+    The constraint filter had done its job; nothing downstream ranks by
+    price, because relevance scoring has no notion of cost.
+
+    Deliberately skipped when a price was given. "Affordable SUV under 15
+    lakh" already quantifies affordable, and sorting ascending inside that
+    budget surfaces only the very cheapest -- the customer asked for
+    options within a budget, not the single cheapest thing in it. An
+    explicit "cheapest" still wins, since that is a direct instruction
+    rather than a vague preference.
+    """
+    if price_min is not None or price_max is not None:
+        return None, None
+    if _BUDGET_WORD_RE.search(query.lower()):
+        return "price_lakhs", "asc"
+    return None, None
 
 
 def extract_price_constraints(text: str) -> Tuple[Optional[float], Optional[float]]:

@@ -73,7 +73,7 @@ largest boot, best mileage...), trust that mark and never give a car a superlati
 with. Never say one car beats another on a spec -- better mileage, more seats, faster -- unless the
 table marks it; if neither car is marked, give each one's own figure and leave the judgement out.
 Put each number beside the car it belongs to; never say "respectively". Don't claim anything
-about a car whose figure is N/A. Don't assume requirements the customer never stated.
+about a car whose figure is "not recorded". Don't assume requirements the customer never stated.
 
 Modes: EXACT = all requirements met, just recommend. RELAXED = say plainly which of their
 requirements these cars miss. FALLBACK = say plainly nothing was verified. SUPERLATIVE = say which
@@ -103,6 +103,16 @@ _META_NARRATION_MARKERS = (
     "the user wants",
     "the user asked",
     "the user's request",
+    # The prompt casts the model as a salesperson talking to a customer, so
+    # when it narrates it says "the customer", not "the user". Covering only
+    # the "user" phrasings let the most common narration opening through
+    # untouched: "The customer asked for a fast BMW, and the retrieved
+    # vehicles are...".
+    "the customer asked",
+    "the customer wants",
+    "the customer is looking for",
+    "the customer's request",
+    "the customer has asked",
     "the retrieved vehicles",
     "the retrieval mode",
     "let me think",
@@ -150,30 +160,109 @@ def generate_answer(query: str, outcome: RetrievalOutcome, chunk_store: ChunkSto
             timeout=config.GENERATION_FALLBACK_TIMEOUT_SECONDS,
             max_tokens=config.GENERATION_MAX_TOKENS,
         )
-        if needs_regeneration(answer, outcome):
-            # The fast schema path rambled, echoed the raw context back, or
-            # trailed off incomplete -- fall back to letting the model think
-            # freely (slower, ~tens of seconds, but reliably a real written
-            # answer; see ollama_client.py's module docstring).
-            regenerated = chat_long_form(messages=messages, max_tokens=config.GENERATION_REGEN_MAX_TOKENS)
-            # Only accept the retry if it actually produced something. The
-            # long-form path runs with thinking enabled, so a token ceiling
-            # can be consumed entirely by reasoning and return empty content
-            # -- handing the user a blank reply, strictly worse than the
-            # flawed answer we already had.
-            if regenerated and regenerated.strip():
-                answer = regenerated
-        if not _mentions_any_vehicle(answer, outcome) or _is_bare_vehicle_name(answer, outcome):
-            # Last line of defence. Prose that names none of the retrieved
-            # vehicles is ungrounded by definition -- it cannot be about
-            # them. Observed when the model narrates its own deliberation
-            # ("I need to check which of these fit...") and the token
-            # ceiling cuts it off before it ever reaches a recommendation.
-            # Showing the real shortlist is honest; showing that is not.
-            return _ungrounded_message(outcome)
-        return answer
+        return finalise_answer(answer, query, outcome, chunk_store)
     except OllamaError as e:
         return _fallback_message(outcome, e)
+
+
+def finalise_answer(answer: str, query: str, outcome: RetrievalOutcome, chunk_store: ChunkStore) -> str:
+    """The post-generation quality gate, shared by every caller.
+
+    This lives in one function because it previously did not. The checks
+    were inline in generate_answer(), and the Streamlit app never calls
+    that -- it streams via generate_answer_stream() -- so the app silently
+    ran without the grounding and bare-name guards, and showed the user
+    raw meta-narration ("The customer asked for a fast BMW, and the
+    retrieved vehicles are..."). Two paths, two behaviours, one of them
+    the one users actually see. Any new caller gets the same gate.
+    """
+    answer = _strip_narration_preamble(answer)
+    if needs_regeneration(answer, outcome):
+        # The fast schema path rambled, echoed the raw context back, or
+        # trailed off incomplete -- fall back to letting the model think
+        # freely (slower, ~tens of seconds, but reliably a real written
+        # answer; see ollama_client.py's module docstring).
+        regenerated = regenerate_long_form(query, outcome, chunk_store)
+        # Only accept the retry if it actually produced something. The
+        # long-form path runs with thinking enabled, so a token ceiling
+        # can be consumed entirely by reasoning and return empty content
+        # -- handing the user a blank reply, strictly worse than the
+        # flawed answer we already had.
+        if regenerated and regenerated.strip():
+            answer = regenerated
+    if _looks_like_meta_narration(answer):
+        # The grounding check below cannot catch this on its own: narration
+        # that lists the shortlist ("The retrieved vehicles are BMW X7,
+        # Lexus RX, and Tata Safari") names real vehicles and sails through
+        # it. Observed shipping 2,275 characters of the model's own
+        # reasoning to the user after regeneration narrated a second time.
+        return _ungrounded_message(outcome)
+    if not _mentions_any_vehicle(answer, outcome) or _is_bare_vehicle_name(answer, outcome):
+        # Last line of defence. Prose that names none of the retrieved
+        # vehicles is ungrounded by definition -- it cannot be about
+        # them. Observed when the model narrates its own deliberation
+        # ("I need to check which of these fit...") and the token
+        # ceiling cuts it off before it ever reaches a recommendation.
+        # Showing the real shortlist is honest; showing that is not.
+        return _ungrounded_message(outcome)
+    return answer
+
+
+def finalise_streamed_answer(
+    streamed: str, query: str, outcome: RetrievalOutcome, chunk_store: ChunkStore
+) -> str:
+    """Turn whatever the stream produced into the answer to display.
+
+    When the stream narrates, this redoes the work on the NON-streaming
+    path rather than reaching for chat_long_form. That is not arbitrary:
+    chat_text() retries once with a firmer instruction when its output
+    rambles, and chat_text_stream() has no such retry, so the streamed
+    attempt is strictly the weaker one. Measured on the two queries that
+    exposed this -- "give me fast bmw" and "affordable 7 seater suv" --
+    the stream narrated both times while the non-streaming path returned
+    clean prose both times. Routing recovery through chat_long_form
+    instead produced narration again and fell through to the shortlist.
+    """
+    if not streamed.strip() or looks_like_meta_narration(streamed):
+        return generate_answer(query, outcome, chunk_store)
+    return finalise_answer(streamed, query, outcome, chunk_store)
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _strip_narration_preamble(answer: str) -> str:
+    """Drop leading sentences that narrate instead of recommending.
+
+    The model often clears its throat before answering properly:
+
+        The user wants an affordable 7-seater SUV. The retrieved vehicles
+        are ranked by price_lakhs (lowest first). The top pick is Mahindra
+        Bolero, which starts at Rs 8.12 Lakh. ...
+
+    Only the first two sentences are narration; everything after is a
+    usable recommendation. Rejecting the whole answer threw that away and
+    showed the customer a bare shortlist, and regenerating paid tens of
+    seconds to produce what was already sitting there. Strip the preamble
+    instead, and let the remaining text face the normal checks -- if what
+    is left is still narration, those reject it as before.
+    """
+    sentences = _SENTENCE_SPLIT_RE.split(answer.strip())
+    kept = 0
+    while kept < len(sentences) and _looks_like_meta_narration(sentences[kept]):
+        kept += 1
+    if kept == 0:
+        return answer
+    remainder = " ".join(sentences[kept:]).strip()
+    return remainder or answer
+
+
+def looks_like_meta_narration(answer: str) -> bool:
+    """Public wrapper so the UI can abort a stream the moment the model
+    starts narrating, instead of displaying the narration and replacing it
+    afterwards. Safe on partial text, unlike needs_regeneration(), whose
+    completeness check would fire on every prefix."""
+    return _looks_like_meta_narration(answer)
 
 
 def generate_answer_stream(query: str, outcome: RetrievalOutcome, chunk_store: ChunkStore) -> Iterator[str]:

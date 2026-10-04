@@ -4,7 +4,7 @@ Uses only the clean, precomputed numeric metadata fields (never noisy raw
 text like "251 BHP@5000 RPM" or "1,18,950") except for Peak Power / Peak
 Torque, which are compound text with no clean numeric equivalent and are
 read straight from raw_fields. Every value round-trips through a
-missing-value guard that renders "N/A" -- never Python's "None" -- and
+missing-value guard that renders "not recorded" -- never Python's "None", and
 every float is rounded to 2 decimals before interpolation (the source
 data has float artifacts from Crore->Lakh conversion, e.g.
 Price_Max_Lakhs = 243.00000000000003 for one Porsche Panamera trim).
@@ -16,6 +16,10 @@ import config
 from src.chunking.models import Chunk
 from src.chunking.splitter import recursive_character_split
 from src.enrichment.models import EnrichedDocument
+
+# Shown wherever the dataset has no value. Deliberately wordy: "N/A" is
+# ambiguous enough that the model reported it as an absent feature.
+_MISSING = "not recorded"
 
 
 def build_vehicle_chunks(enriched: EnrichedDocument) -> List[Chunk]:
@@ -59,14 +63,14 @@ def build_product_overview(metadata: Dict[str, Any]) -> str:
     seating_text = f"{seating} people" if seating is not None else "an unspecified number of people"
 
     fuel_types = metadata.get("fuel_types") or []
-    fuel_text = ", ".join(fuel_types) if fuel_types else "N/A"
+    fuel_text = ", ".join(fuel_types) if fuel_types else _MISSING
 
     transmission_options = []
     if metadata.get("has_automatic"):
         transmission_options.append("Automatic")
     if metadata.get("has_manual"):
         transmission_options.append("Manual")
-    transmission_text = " and ".join(transmission_options) if transmission_options else "N/A"
+    transmission_text = " and ".join(transmission_options) if transmission_options else _MISSING
 
     sentences = [
         f"{name} is a {body_type} manufactured by {brand}, priced at approximately "
@@ -81,7 +85,7 @@ def build_product_overview(metadata: Dict[str, Any]) -> str:
         sentences.append(f"Fuel efficiency ranges from {mileage_min} to {mileage_max} kmpl.")
 
     emi = metadata.get("emi_rupees")
-    emi_text = f"Rs {emi:,.0f}/month" if emi is not None else "N/A"
+    emi_text = f"Rs {emi:,.0f}/month" if emi is not None else _MISSING
     sentences.append(f"Estimated EMI starts at {emi_text}.")
 
     return " ".join(sentences)
@@ -102,11 +106,11 @@ def build_features(metadata: Dict[str, Any], raw_fields: Dict[str, Any]) -> str:
         else:
             powertrain = f"Engine displacement: {_fmt_num(engine_min)} to {_fmt_num(engine_max)} cc."
 
-    peak_power = raw_fields.get("Peak Power") or "N/A"
-    peak_torque = raw_fields.get("Peak Torque") or "N/A"
+    peak_power = raw_fields.get("Peak Power") or _MISSING
+    peak_torque = raw_fields.get("Peak Torque") or _MISSING
 
     top_speed = _fmt_num(metadata.get("top_speed_kmph"))
-    top_speed_text = f"{top_speed} km/h" if top_speed != "N/A" else "N/A"
+    top_speed_text = f"{top_speed} km/h" if top_speed != _MISSING else _MISSING
 
     length = _fmt_num(metadata.get("length_mm"))
     width = _fmt_num(metadata.get("width_mm"))
@@ -115,11 +119,11 @@ def build_features(metadata: Dict[str, Any], raw_fields: Dict[str, Any]) -> str:
     ground_clearance = _fmt_num(metadata.get("ground_clearance_mm"))
 
     boot_space = _fmt_num(metadata.get("boot_space_l"))
-    boot_space_text = f"{boot_space} L" if boot_space != "N/A" else "N/A"
+    boot_space_text = f"{boot_space} L" if boot_space != _MISSING else _MISSING
     fuel_capacity = _fmt_num(metadata.get("fuel_capacity_l"))
-    fuel_capacity_text = f"{fuel_capacity} L" if fuel_capacity != "N/A" else "N/A"
+    fuel_capacity_text = f"{fuel_capacity} L" if fuel_capacity != _MISSING else _MISSING
     turning_radius = _fmt_num(metadata.get("turning_radius_m"))
-    turning_radius_text = f"{turning_radius} m" if turning_radius != "N/A" else "N/A"
+    turning_radius_text = f"{turning_radius} m" if turning_radius != _MISSING else _MISSING
 
     colors = metadata.get("colors") or []
     color_variants = metadata.get("color_variants_count")
@@ -130,7 +134,7 @@ def build_features(metadata: Dict[str, Any], raw_fields: Dict[str, Any]) -> str:
         if remaining > 0:
             colors_text += f", and {remaining} more"
     else:
-        colors_text = "N/A"
+        colors_text = _MISSING
     variants_text = f" ({color_variants} variants total)" if color_variants is not None else ""
 
     sentences = [
@@ -150,7 +154,7 @@ def build_features(metadata: Dict[str, Any], raw_fields: Dict[str, Any]) -> str:
 
 def _fmt_num(value: Any) -> str:
     if value is None:
-        return "N/A"
+        return _MISSING
     rounded = round(float(value), 2)
     if rounded == int(rounded):
         return str(int(rounded))

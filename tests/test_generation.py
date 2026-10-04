@@ -254,3 +254,147 @@ def test_generate_answer_real_end_to_end(knowledge_base):
     # "The retrieval mode is EXACT" openers. What must hold instead is that
     # the answer reads as a reply to the customer, not analysis about them.
     assert not needs_regeneration(answer, outcome)
+
+
+def test_finalise_answer_replaces_meta_narration(knowledge_base):
+    # Regression: the Streamlit app streams via generate_answer_stream and
+    # never calls generate_answer, so the grounding guards that lived inline
+    # in generate_answer did not run in the app at all. Users saw raw
+    # narration ("The customer asked for a fast BMW, and the retrieved
+    # vehicles are..."). Both paths now share finalise_answer.
+    from src.rag.generation import finalise_answer
+
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+    narration = (
+        "The customer asked for a fast car and the retrieved vehicles are listed above. "
+        "I need to check which of these fit the budget before recommending one."
+    )
+    with patch("src.rag.generation.chat_long_form", return_value="The Porsche Macan starts at Rs 69.98 Lakh."):
+        answer = finalise_answer(narration, "fast car", outcome, knowledge_base.chunk_store)
+    assert answer == "The Porsche Macan starts at Rs 69.98 Lakh."
+
+
+def test_finalise_answer_falls_back_when_regeneration_is_also_ungrounded(knowledge_base):
+    from src.rag.generation import finalise_answer
+
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+    narration = "The customer asked for a fast car. I need to check the comparison table first."
+    with patch("src.rag.generation.chat_long_form", return_value="I should look at the table again."):
+        answer = finalise_answer(narration, "fast car", outcome, knowledge_base.chunk_store)
+    assert "Porsche Macan" in answer  # the real shortlist, not the narration
+    assert "I need to check" not in answer
+
+
+def test_finalise_answer_leaves_a_good_answer_alone(knowledge_base):
+    from src.rag.generation import finalise_answer
+
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+    good = "The Porsche Macan starts at Rs 69.98 Lakh and suits you for its 954 L boot and strong engine."
+    assert finalise_answer(good, "suv", outcome, knowledge_base.chunk_store) == good
+
+
+def test_looks_like_meta_narration_is_safe_on_a_partial_stream(knowledge_base):
+    # The UI calls this on every chunk, so it must not fire on a clean
+    # prefix -- otherwise a good answer gets aborted mid-sentence.
+    from src.rag.generation import looks_like_meta_narration
+
+    assert looks_like_meta_narration("The Porsche Mac") is False
+    assert looks_like_meta_narration("The Porsche Macan starts at Rs 69") is False
+    assert looks_like_meta_narration("The customer asked for a fast BMW, and the retrieved") is True
+
+
+def test_narrating_stream_is_redone_on_the_non_streaming_path(knowledge_base):
+    # chat_text() retries once with a firmer instruction when output
+    # rambles; chat_text_stream() has no such retry, so a narrating stream
+    # must be redone on the stronger path rather than handed to
+    # chat_long_form (which narrated again and fell through to the
+    # shortlist on the queries that exposed this).
+    from src.rag.generation import finalise_streamed_answer
+
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+    good = "The Porsche Macan starts at Rs 69.98 Lakh and suits you for its 954 L boot."
+    with patch("src.rag.generation.chat_text", return_value=good) as mock_text:
+        answer = finalise_streamed_answer(
+            "The customer asked for a fast car, and the retrieved vehicles are",
+            "fast car",
+            outcome,
+            knowledge_base.chunk_store,
+        )
+    assert answer == good
+    mock_text.assert_called_once()
+
+
+def test_clean_stream_is_kept_without_regenerating(knowledge_base):
+    from src.rag.generation import finalise_streamed_answer
+
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+    good = "The Porsche Macan starts at Rs 69.98 Lakh and suits you for its 954 L boot and strong engine."
+    with patch("src.rag.generation.chat_text") as mock_text, patch(
+        "src.rag.generation.chat_long_form"
+    ) as mock_long:
+        assert finalise_streamed_answer(good, "suv", outcome, knowledge_base.chunk_store) == good
+    mock_text.assert_not_called()
+    mock_long.assert_not_called()
+
+
+def test_empty_stream_is_redone(knowledge_base):
+    from src.rag.generation import finalise_streamed_answer
+
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+    good = "The Porsche Macan starts at Rs 69.98 Lakh and is a strong pick for you."
+    with patch("src.rag.generation.chat_text", return_value=good):
+        assert finalise_streamed_answer("   ", "suv", outcome, knowledge_base.chunk_store) == good
+
+
+def test_narration_that_lists_vehicles_is_still_rejected(knowledge_base):
+    # The grounding guard alone passes this: narration naming the shortlist
+    # ("The retrieved vehicles are ...") does mention real vehicles. 2,275
+    # characters of model reasoning shipped to a user this way.
+    from src.rag.generation import finalise_answer
+
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+    narration = (
+        "I need to write a 3-6 sentence recommendation as a car salesperson. "
+        "The retrieved vehicles are Porsche Macan. I need to open with the top pick by name."
+    )
+    with patch("src.rag.generation.chat_long_form", return_value=narration):
+        answer = finalise_answer(narration, "suv", outcome, knowledge_base.chunk_store)
+    assert "I need to" not in answer
+    assert "Porsche Macan" in answer  # the honest shortlist instead
+
+
+def test_narration_preamble_is_stripped_not_discarded(knowledge_base):
+    # The model clears its throat before answering: two narration sentences
+    # then a usable recommendation. Rejecting the whole thing showed the
+    # customer a bare shortlist and threw away good prose.
+    from src.rag.generation import finalise_answer
+
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+    raw = (
+        "The user wants a fast SUV. The retrieved vehicles are ranked by price. "
+        "The top pick is the Porsche Macan, which starts at Rs 69.98 Lakh and has a 954 L boot."
+    )
+    with patch("src.rag.generation.chat_long_form") as mock_long:
+        answer = finalise_answer(raw, "fast suv", outcome, knowledge_base.chunk_store)
+    assert answer.startswith("The top pick is the Porsche Macan")
+    assert "The user wants" not in answer
+    mock_long.assert_not_called()  # no slow regeneration needed
+
+
+def test_all_narration_still_rejected_after_stripping(knowledge_base):
+    from src.rag.generation import finalise_answer
+
+    merged = _merged_for_macan(knowledge_base.chunk_store)
+    outcome = RetrievalOutcome(mode="exact", results=[merged], original_constraints=None)
+    raw = "I need to write a recommendation. The retrieved vehicles are Porsche Macan. I should check the table."
+    with patch("src.rag.generation.chat_long_form", return_value=raw):
+        answer = finalise_answer(raw, "suv", outcome, knowledge_base.chunk_store)
+    assert "I need to" not in answer and "I should" not in answer
