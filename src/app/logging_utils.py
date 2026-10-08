@@ -24,6 +24,7 @@ class PipelineLog:
     transformed_query: str = ""
     constraints_summary: Dict[str, Any] = field(default_factory=dict)
     relaxation_steps: List[str] = field(default_factory=list)
+    carried_over: List[str] = field(default_factory=list)  # constraints inherited from an earlier turn
     candidate_count: int = 0
     final_chunk_ids: List[str] = field(default_factory=list)
     retrieval_method: str = "hybrid"

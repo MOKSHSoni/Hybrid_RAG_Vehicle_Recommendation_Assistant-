@@ -19,6 +19,19 @@ def resolve_context(query: str, history: List[ConversationTurn]) -> str:
     if not history:
         return query
 
+    # This prompt is deliberately back to its original wording. A rewrite was
+    # tried -- "combine the latest message with any brand, budget, body type,
+    # fuel or seat count still in force" -- to stop the model echoing the
+    # query unchanged. It made things materially worse: asked to resolve
+    # "under 15l and 7 seater" it returned "Here are three Mahindra SUVs.",
+    # the ASSISTANT's previous message, discarding the user's question along
+    # with its price ceiling and seat count. Extraction then read constraints
+    # out of that sentence and a 4-seat Thar came back for a 7-seater query.
+    #
+    # Echoing the user's own words loses nothing; echoing the assistant's
+    # loses the question. Conversational memory does not rely on this call
+    # anyway -- constraints are carried forward deterministically in
+    # src/query/memory.py, which cannot drop what the user just said.
     recent = history[-config.CONVERSATION_HISTORY_TURNS :]
     history_text = "\n".join(f"{turn.role}: {turn.content}" for turn in recent)
 

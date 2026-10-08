@@ -15,13 +15,14 @@ demo_phase4.py/demo_phase5.py/demo_phase12.py exercise them directly.
 """
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import FrozenSet, List, Optional
 
 from src.app.logging_utils import PipelineLog
 from src.pipeline import KnowledgeBase, build_knowledge_base
 from src.query.expansion import expand_query
 from src.query.hyde import generate_hypothetical_description
+from src.query.memory import carry_forward, latest_constraints
 from src.query.models import ConversationTurn
 from src.query.regex_extraction import known_brands_from_chunk_store
 from src.query.scope import (
@@ -78,6 +79,9 @@ class TurnResult:
     log: PipelineLog
     expansion_queries: Optional[List[str]] = None
     hyde_description: Optional[str] = None
+    # Human-readable list of constraints inherited from an earlier turn,
+    # shown to the user so memory never changes a request silently.
+    carried_over: List[str] = field(default_factory=list)
 
 
 def answer_query(
@@ -86,6 +90,7 @@ def answer_query(
     history: List[ConversationTurn],
     include_expansion_hyde_debug: bool = False,
     generate: bool = True,
+    use_memory: bool = True,
 ) -> TurnResult:
     """Set generate=False to run everything except the final generation
     stage -- used by the Streamlit UI, which streams generation itself so
@@ -115,6 +120,19 @@ def answer_query(
             ),
             log=log,
         )
+
+    # Inherit the previous turn's constraints AFTER the scope check, never
+    # before. Checking merged constraints would let inherited context smuggle
+    # an off-topic question through: "good clothes" asked after "mahindra"
+    # would arrive carrying brand=Mahindra, count as a populated constraint,
+    # and be answered with Mahindras instead of refused.
+    carried_over: List[str] = []
+    if use_memory:
+        constraints, carried_over = carry_forward(
+            understanding.constraints, latest_constraints(history)
+        )
+        understanding = replace(understanding, constraints=constraints)
+        log.carried_over = carried_over
 
     t0 = time.time()
     transformed = transform_query(understanding.standalone_query)
@@ -166,6 +184,7 @@ def answer_query(
         log=log,
         expansion_queries=expansion_queries,
         hyde_description=hyde_description,
+        carried_over=carried_over,
     )
 
 

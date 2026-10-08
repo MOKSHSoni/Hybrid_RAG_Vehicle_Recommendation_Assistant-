@@ -114,6 +114,12 @@ def render_comparison_table(result) -> None:
 
 def render_result(result) -> None:
     render_mode_badge(result.log.mode)
+    if getattr(result, "carried_over", None):
+        # Shown by default, not hidden in the debug panel. This system
+        # declares its retrieval mode and every relaxation step rather than
+        # quietly reinterpreting a request; silently folding in an earlier
+        # brand would be the one place it broke that rule.
+        st.caption("Carried over from your last question: " + "; ".join(result.carried_over))
     if result.outcome.results:
         for merged in result.outcome.results:
             render_vehicle_card(merged)
@@ -133,6 +139,20 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Options")
+        use_memory = st.checkbox(
+            "Use conversation memory",
+            value=True,
+            help="Carries brand, budget, body type, fuel and seat count from your previous "
+            "question into a follow-up, so \"only 7 seaters\" keeps the brand you just asked "
+            "about. Anything you restate wins. Turning this off clears what is remembered.",
+        )
+        # Turning memory off clears it rather than merely ignoring it: the
+        # user asked for off to mean off, and leaving a hidden thread to
+        # resurface on toggling back would be the surprising behaviour.
+        if not use_memory and st.session_state.get("memory_was_on", True):
+            st.session_state.history = []
+        st.session_state["memory_was_on"] = use_memory
+
         st.session_state["show_debug"] = st.checkbox("Show debug panel", value=False)
         show_experimental = st.checkbox(
             "Also run query expansion + HyDE (debug-only)",
@@ -185,6 +205,7 @@ def main() -> None:
                         st.session_state.history,
                         include_expansion_hyde_debug=show_experimental,
                         generate=False,
+                        use_memory=use_memory,
                     )
                 except Exception as e:
                     st.error(f"Something went wrong while answering: {e}")
@@ -239,8 +260,17 @@ def main() -> None:
                 render_result(result)
 
         st.session_state.messages.append({"role": "assistant", "content": result.answer, "result": result})
-        st.session_state.history.append(ConversationTurn(role="user", content=user_input))
-        st.session_state.history.append(ConversationTurn(role="assistant", content=result.answer))
+        if use_memory:
+            # The user turn carries the constraints this turn resolved to, so a
+            # later follow-up can inherit them without re-extracting.
+            st.session_state.history.append(
+                ConversationTurn(
+                    role="user",
+                    content=user_input,
+                    constraints=result.outcome.original_constraints,
+                )
+            )
+            st.session_state.history.append(ConversationTurn(role="assistant", content=result.answer))
 
 
 if __name__ == "__main__":

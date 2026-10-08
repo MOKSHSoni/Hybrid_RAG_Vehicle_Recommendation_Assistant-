@@ -10,6 +10,11 @@ import config
 class ConversationTurn:
     role: str  # "user" | "assistant"
     content: str
+    # The validated constraints this turn resolved to, carried so a later
+    # follow-up can inherit them (see carry_forward in src/query/memory.py).
+    # Stored rather than re-derived because re-extracting an earlier turn
+    # would mean another LLM call per question.
+    constraints: Optional["Constraints"] = None
 
 
 @dataclass

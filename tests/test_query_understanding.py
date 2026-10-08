@@ -231,15 +231,23 @@ def test_resolve_context_follow_up():
         ConversationTurn(role="assistant", content="Here are a few SUVs under 20 lakh: Nexon, Venue, Sonet."),
     ]
     standalone = resolve_context("what about diesel options", history)
-    # Observed during development: run in isolation, this reliably folds in
-    # the earlier SUV/budget context (e.g. "SUVs under 20 lakh with diesel
-    # options"). Run after other tests that make real Ollama calls in the
-    # same process, it sometimes returns just the cleaned-up follow-up
-    # instead -- reproducible regardless of which prior test runs, so this
-    # is serving-side non-determinism (KV-cache/slot reuse affecting greedy
-    # decoding), not a bug in resolve_context. The only guarantee solid
-    # enough to assert here is that the follow-up's own core intent survives
-    # the rewrite.
+    # This asserts almost nothing, deliberately, and it is important to be
+    # clear about why rather than to let it look like coverage.
+    #
+    # The rewriter does NOT reliably fold context in. Measured against a real
+    # conversation, "only 7 seaters", "what about cheaper ones" and "show me
+    # diesel ones" all came back unchanged -- three for three, 2.8-3.7s each,
+    # so the model ran and chose to echo rather than timing out. Dropping the
+    # JSON schema makes it reason properly but takes over 120 seconds for a
+    # one-line rewrite, so the schema stays.
+    #
+    # Conversational memory therefore does not depend on this call at all:
+    # constraints are carried forward deterministically in Python, and THAT
+    # is covered properly in tests/test_memory.py. What remains here is a
+    # smoke test that the call returns usable text and preserves the
+    # follow-up's own intent. An earlier version of this comment attributed
+    # the behaviour to serving-side non-determinism; the consistent 3/3
+    # failure above does not support that.
     assert "diesel" in standalone.lower()
     assert standalone.strip() != ""
 
