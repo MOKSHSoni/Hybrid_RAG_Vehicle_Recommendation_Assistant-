@@ -177,6 +177,7 @@ def finalise_answer(answer: str, query: str, outcome: RetrievalOutcome, chunk_st
     the one users actually see. Any new caller gets the same gate.
     """
     answer = _strip_narration_preamble(answer)
+    answer = _collapse_repeated_sentences(answer)
     if needs_regeneration(answer, outcome):
         # The fast schema path rambled, echoed the raw context back, or
         # trailed off incomplete -- fall back to letting the model think
@@ -255,6 +256,38 @@ def _strip_narration_preamble(answer: str) -> str:
         return answer
     remainder = " ".join(sentences[kept:]).strip()
     return remainder or answer
+
+
+def _collapse_repeated_sentences(answer: str) -> str:
+    """Drop sentences the model has already said.
+
+    At temperature 0 the model decodes greedily, so a phrasing pattern it
+    falls into has nothing to break it out. One observed answer repeated
+    "The Mahindra Bolero is the most affordable option at 8.12 Lakh" and
+    its two companions three times each before the token ceiling cut it
+    off mid-word. Every existing guard passed it: a vehicle was named, it
+    was well under the runaway character ceiling, and the narration list
+    did not happen to contain "the user's budget".
+
+    Matching is on whole sentences, normalised, and only exact repeats are
+    removed. Deliberately not n-gram overlap: a real recommendation says
+    "Mahindra" once per vehicle and "starts at Rs" once per price, and a
+    fuzzier rule would start deleting those. The first occurrence always
+    survives, so nothing the model said is lost -- only its echoes.
+    """
+    sentences = _SENTENCE_SPLIT_RE.split(answer.strip())
+    seen = set()
+    kept = []
+    for sentence in sentences:
+        key = re.sub(r"[^a-z0-9 ]", "", sentence.lower()).strip()
+        key = re.sub(r"\s+", " ", key)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        kept.append(sentence)
+    collapsed = " ".join(kept).strip()
+    return collapsed or answer
 
 
 def looks_like_meta_narration(answer: str) -> bool:

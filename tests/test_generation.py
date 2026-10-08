@@ -398,3 +398,71 @@ def test_all_narration_still_rejected_after_stripping(knowledge_base):
     with patch("src.rag.generation.chat_long_form", return_value=raw):
         answer = finalise_answer(raw, "suv", outcome, knowledge_base.chunk_store)
     assert "I need to" not in answer and "I should" not in answer
+
+
+def test_repeated_sentences_are_collapsed():
+    # Observed: the model looped, repeating the same three price sentences
+    # three times before the token ceiling cut it off mid-word. Every guard
+    # passed it -- a vehicle was named, it was under the character ceiling,
+    # and the narration list did not contain "the user's budget".
+    from src.rag.generation import _collapse_repeated_sentences
+
+    looped = (
+        "All three vehicles seat 7 people. "
+        "The Mahindra Bolero is the most affordable option at 8.12 Lakh. "
+        "The Mahindra Scorpio starts at 11.98 Lakh. "
+        "The Mahindra Bolero is the most affordable option at 8.12 Lakh. "
+        "The Mahindra Scorpio starts at 11.98 Lakh."
+    )
+    out = _collapse_repeated_sentences(looped)
+    assert out.count("most affordable option") == 1
+    assert out.count("Scorpio starts at") == 1
+    assert out.startswith("All three vehicles seat 7 people.")
+
+
+def test_similar_but_distinct_sentences_survive():
+    # The costly false positive: a real recommendation repeats "starts at Rs"
+    # once per vehicle. An n-gram rule would delete these; a whole-sentence
+    # rule must not.
+    from src.rag.generation import _collapse_repeated_sentences
+
+    good = (
+        "The Tata Safari starts at Rs 14.69 Lakh. "
+        "The BMW X7 starts at Rs 93 lakh. "
+        "The Lexus RX starts at Rs 104 lakh."
+    )
+    assert _collapse_repeated_sentences(good) == good
+
+
+def test_collapse_keeps_something_when_every_sentence_repeats():
+    from src.rag.generation import _collapse_repeated_sentences
+
+    out = _collapse_repeated_sentences("Same line. Same line. Same line.")
+    assert out.strip() != ""
+    assert out.count("Same line") == 1
+
+
+def test_extraction_never_receives_a_repetition_penalty():
+    # JSON output repeats field names, quotes and nulls by design. Penalising
+    # that would corrupt the structure, so the option must stay off unless a
+    # caller explicitly asks -- and only generation does.
+    from unittest.mock import patch
+
+    import ollama
+
+    from src.query.llm_extraction import extract_constraints_via_llm
+
+    seen = {}
+
+    def fake_chat(self, *a, **kw):
+        seen.update(kw.get("options") or {})
+        raise RuntimeError("stop")
+
+    with patch.object(ollama.Client, "chat", fake_chat):
+        try:
+            extract_constraints_via_llm("suv under 15 lakh")
+        except Exception:
+            pass
+
+    assert "repeat_penalty" not in seen
+    assert "repeat_last_n" not in seen

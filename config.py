@@ -107,6 +107,15 @@ GENERATION_MAX_TOKENS = 600
 # evaluation, still inside GENERATION_FALLBACK_TIMEOUT_SECONDS.
 GENERATION_REGEN_MAX_TOKENS = 900
 
+# Repetition was fixed by collapsing duplicate sentences after generation
+# (see _collapse_repeated_sentences), not by a decoding penalty. A
+# repeat_penalty was tried and removed: a comparison legitimately repeats a
+# brand once per vehicle and a price phrase once per car, and penalising
+# that taxes wording the answer needs. The deterministic collapse removes
+# only whole sentences the model already emitted, so it cannot distort word
+# choice at all. ollama_client still accepts the option for any future
+# caller; nothing passes it.
+
 # ---- Query understanding (Phase 3) ----
 EXTRACTION_RETRY_COUNT = 1  # retry the LLM extraction once on invalid JSON, then fall back to regex-only
 CONVERSATION_HISTORY_TURNS = 6  # how many recent turns feed context resolution

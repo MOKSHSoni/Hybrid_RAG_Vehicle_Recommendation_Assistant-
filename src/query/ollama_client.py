@@ -68,6 +68,12 @@ _NO_RAMBLING_INSTRUCTION = (
 )
 _THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
+# Look-back window used only if a caller passes repeat_penalty. Nothing does:
+# generation's repetition problem is handled after the fact by collapsing
+# duplicate sentences, which cannot distort word choice the way a decoding
+# penalty can. Kept so the option is available without re-plumbing it.
+_REPEAT_LAST_N = 256
+
 
 def chat(
     messages: List[Dict[str, str]],
@@ -77,6 +83,8 @@ def chat(
     timeout: float = config.OLLAMA_TIMEOUT_SECONDS,
     think: Optional[bool] = False,
     max_tokens: Optional[int] = None,
+    repeat_penalty: Optional[float] = None,
+    repeat_last_n: Optional[int] = None,
 ) -> str:
     """For structured (JSON schema) output. For free-form text generation,
     prefer chat_text() (fast) or chat_long_form() (slower, robust
@@ -97,6 +105,13 @@ def chat(
         options: Dict[str, Any] = {"temperature": temperature}
         if max_tokens is not None:
             options["num_predict"] = max_tokens
+        # Off unless a caller asks. Extraction must never get a repetition
+        # penalty: its JSON output repeats field names, quotes and nulls by
+        # design, and penalising that corrupts the structure.
+        if repeat_penalty is not None:
+            options["repeat_penalty"] = repeat_penalty
+        if repeat_last_n is not None:
+            options["repeat_last_n"] = repeat_last_n
         kwargs: Dict[str, Any] = dict(
             model=model,
             messages=messages,
@@ -129,6 +144,7 @@ def chat_text(
     temperature: float = config.OLLAMA_TEMPERATURE,
     timeout: float = config.OLLAMA_TIMEOUT_SECONDS,
     max_tokens: Optional[int] = None,
+    repeat_penalty: Optional[float] = None,
 ) -> str:
     """Free-form text generation (query rewriting, HyDE descriptions,
     etc.), routed through a trivial {"result": "..."} schema for the
@@ -136,10 +152,10 @@ def chat_text(
     Detects rambling-shaped output (see looks_like_rambling) and retries
     once with a firmer instruction; falls back to the raw response if the
     model ever ignores the schema entirely."""
-    result = _chat_text_once(messages, model, temperature, timeout, max_tokens)
+    result = _chat_text_once(messages, model, temperature, timeout, max_tokens, repeat_penalty)
     if looks_like_rambling(result):
         firmer_messages = messages + [{"role": "user", "content": _NO_RAMBLING_INSTRUCTION}]
-        result = _chat_text_once(firmer_messages, model, temperature, timeout, max_tokens)
+        result = _chat_text_once(firmer_messages, model, temperature, timeout, max_tokens, repeat_penalty)
     return result
 
 
@@ -149,6 +165,7 @@ def chat_long_form(
     temperature: float = config.OLLAMA_TEMPERATURE,
     timeout: float = config.GENERATION_FALLBACK_TIMEOUT_SECONDS,
     max_tokens: Optional[int] = None,
+    repeat_penalty: Optional[float] = None,
 ) -> str:
     """Robust (but slow) fallback for longer, more involved generation
     where chat_text()'s schema trick still rambles: lets the model think
@@ -162,13 +179,15 @@ def chat_long_form(
     profiling found it timed out on 6 of the 10 turns that invoked it.
     Callers should pass max_tokens."""
     raw = chat(messages=messages, model=model, format=None, temperature=temperature, timeout=timeout,
-               think=None, max_tokens=max_tokens)
+               think=None, max_tokens=max_tokens, repeat_penalty=repeat_penalty,
+               repeat_last_n=_REPEAT_LAST_N if repeat_penalty else None)
     return _THINK_TAG_RE.sub("", raw).strip()
 
 
-def _chat_text_once(messages, model, temperature, timeout, max_tokens=None) -> str:
+def _chat_text_once(messages, model, temperature, timeout, max_tokens=None, repeat_penalty=None) -> str:
     raw = chat(messages=messages, model=model, format=_TEXT_SCHEMA, temperature=temperature,
-               timeout=timeout, max_tokens=max_tokens)
+               timeout=timeout, max_tokens=max_tokens, repeat_penalty=repeat_penalty,
+               repeat_last_n=_REPEAT_LAST_N if repeat_penalty else None)
     try:
         return json.loads(raw)["result"].strip()
     except (json.JSONDecodeError, KeyError, TypeError):
@@ -187,6 +206,7 @@ def chat_text_stream(
     temperature: float = config.OLLAMA_TEMPERATURE,
     timeout: float = config.GENERATION_FALLBACK_TIMEOUT_SECONDS,
     max_tokens: Optional[int] = None,
+    repeat_penalty: Optional[float] = None,
 ) -> Iterator[str]:
     """Streaming counterpart to chat_text(), for UI surfaces that want
     first-token latency instead of waiting on a whole answer.
@@ -203,6 +223,9 @@ def chat_text_stream(
         options: Dict[str, Any] = {"temperature": temperature}
         if max_tokens is not None:
             options["num_predict"] = max_tokens
+        if repeat_penalty is not None:
+            options["repeat_penalty"] = repeat_penalty
+            options["repeat_last_n"] = _REPEAT_LAST_N
         stream = client.chat(
             model=model,
             messages=messages,
